@@ -52,6 +52,13 @@
 		onClose();
 	};
 
+	// Size the panel to a share of the row it splits with its sibling; not persisted.
+	export const setWidthFraction = (fraction: number) => {
+		const container = panelElement?.parentElement;
+		if (!container) return;
+		width = clamp(Math.round(container.clientWidth * fraction));
+	};
+
 	const resizeStartHandler = (e: PointerEvent) => {
 		if (!open) return;
 

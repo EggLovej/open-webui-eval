@@ -177,6 +177,17 @@ export const artifactContents = writable(null);
 
 export const embed = writable(null);
 
+// Cited chunk shown next to the chat; null closes the source panel.
+export type SourceViewerState = {
+	fileId: string;
+	name: string;
+	page: number | null; // 1-based
+	text: string;
+};
+export const sourceViewer: Writable<SourceViewerState | null> = writable(null);
+// True while ChatControls is mounted, i.e. there is a side panel to open the source in.
+export const sourceViewerAvailable = writable(false);
+
 export const temporaryChatEnabled = writable(false);
 
 // Transient one-shot event from the desktop shell (Spotlight, drag-and-drop, etc.).

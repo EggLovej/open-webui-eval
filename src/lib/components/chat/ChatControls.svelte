@@ -15,6 +15,8 @@
 		settings,
 		showFileNavPath,
 		selectedTerminalId,
+		sourceViewer,
+		sourceViewerAvailable,
 		user
 	} from '$lib/stores';
 
@@ -24,6 +26,7 @@
 	import ResizableSidePanel from '../common/ResizableSidePanel.svelte';
 	import Artifacts from './Artifacts.svelte';
 	import Embeds from './ChatControls/Embeds.svelte';
+	import SourceViewer from './ChatControls/SourceViewer.svelte';
 	import FileNav from './FileNav.svelte';
 	import PyodideFileNav from './PyodideFileNav.svelte';
 	import Overview from './Overview.svelte';
@@ -172,10 +175,13 @@
 
 		document.addEventListener('mousedown', onMouseDown);
 		document.addEventListener('mouseup', onMouseUp);
+		sourceViewerAvailable.set(true);
 
 		return () => {
 			isDestroyed = true;
 			mounted = false;
+			sourceViewerAvailable.set(false);
+			sourceViewer.set(null);
 			if (!largeScreen) {
 				showControls.set(false);
 			}
@@ -191,13 +197,31 @@
 		}
 		showArtifacts.set(false);
 		showEmbeds.set(false);
+		sourceViewer.set(null);
 		if ($showCallOverlay) showCallOverlay.set(false);
 	};
 
 	$: if (mounted && !chatId) closeHandler();
 
+	// The source viewer opens at half the chat area; the previous width comes back on close.
+	let sidePanel: { setWidthFraction: (fraction: number) => void } | null = null;
+	let widthBeforeSource: number | null = null;
+
+	const onSourceViewerToggle = async (open: boolean) => {
+		if (open && widthBeforeSource === null) {
+			widthBeforeSource = controlsWidth;
+			await tick();
+			sidePanel?.setWidthFraction(0.5);
+		} else if (!open && widthBeforeSource !== null) {
+			controlsWidth = widthBeforeSource;
+			widthBeforeSource = null;
+		}
+	};
+
+	$: onSourceViewerToggle(!!$sourceViewer);
+
 	// Helper: is a "special" full-screen panel active?
-	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds;
+	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds || !!$sourceViewer;
 </script>
 
 {#if !largeScreen}
@@ -228,6 +252,8 @@
 					<Embeds />
 				{:else if $showArtifacts}
 					<Artifacts {history} />
+				{:else if $sourceViewer}
+					<SourceViewer />
 				{:else}
 					<!-- Controls + Files tabs -->
 					<div class="flex flex-col h-full min-h-0">
@@ -317,6 +343,7 @@
 	{/if}
 {:else}
 	<ResizableSidePanel
+		bind:this={sidePanel}
 		open={$showControls}
 		bind:width={controlsWidth}
 		minWidth={350}
@@ -353,6 +380,8 @@
 					<Embeds overlay={dragged} />
 				{:else if $showArtifacts}
 					<Artifacts {history} overlay={dragged} />
+				{:else if $sourceViewer}
+					<SourceViewer />
 				{:else}
 					<!-- Controls + Files tabs -->
 					<div class="flex flex-col h-full min-h-0">
