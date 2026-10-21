@@ -10,7 +10,7 @@
 	} from '$lib/stores';
 	import { isValidHttpUrl } from '$lib/utils';
 
-	import { getCitationKey } from '$lib/utils/citations';
+	import { getCitationKey, resolveSegments, stripLineNumbers } from '$lib/utils/citations';
 
 	import CitationModal from './Citations/CitationModal.svelte';
 
@@ -41,9 +41,11 @@
 
 	// File chunks open next to the chat; web results and views without a side panel use the modal.
 	// `claim` is the sentence an inline [n] backs; the citation list below has none.
-	const openCitation = (citation, claim = '') => {
+	const openCitation = (citation, claim = '', segment: string | null = null) => {
 		const metadata = citation?.metadata?.[0];
 		if (!readOnly && $sourceViewerAvailable && metadata?.file_id) {
+			const chunk = citation.document?.[0] ?? '';
+			const selected = resolveSegments(chunk, segment);
 			showArtifacts.set(false);
 			showEmbeds.set(false);
 			sourceViewer.set({
@@ -51,8 +53,8 @@
 				format: isPdfChunk(metadata) ? 'pdf' : 'text',
 				name: decodeString(citation.source?.name ?? metadata.name ?? ''),
 				page: Number.isInteger(metadata.page) ? metadata.page + 1 : null,
-				text: citation.document?.[0] ?? '',
-				claim: claim || null,
+				text: selected ?? stripLineNumbers(chunk),
+				claim: selected ? null : claim || null,
 				model: model || null,
 				chatId: chatId || null
 			});
@@ -72,7 +74,7 @@
 			index = parseInt(output[0]) - 1;
 
 			if (output.length > 1) {
-				suffix = output[1];
+				suffix = output.slice(1).join('#');
 			}
 		} else {
 			index = sourceId - 1;
@@ -109,7 +111,7 @@
 					showCitationModal = true;
 				}
 			} else {
-				openCitation(citations[index], claim);
+				openCitation(citations[index], claim, suffix);
 			}
 		}
 	};

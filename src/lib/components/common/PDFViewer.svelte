@@ -8,7 +8,13 @@
 	import { mapWordComments, type PdfTextRun } from '$lib/utils/comments/pdfAnchors';
 	import { findTextRange, highlightRange, commentPin } from '$lib/utils/comments/highlights';
 	import type { FileComment, CommentResult } from '$lib/utils/comments/types';
-	import { findPassageRanges } from '$lib/utils/citations';
+	import {
+		formFieldsFromAnnotations,
+		findPassageRanges,
+		locateOnPage,
+		mergeLineBoxes,
+		type PdfFormField
+	} from '$lib/utils/citations';
 
 	const i18n: any = getContext('i18n');
 
@@ -27,7 +33,7 @@
 	export let onAnchors: ((ids: string[]) => void) | null = null;
 	// Passage to highlight and scroll to (e.g. a cited chunk); searched on targetPage first.
 	export let highlightText: string | null = null;
-	// Sentences within highlightText to emphasise (e.g. the ones backing a claim); the rest stays faint.
+	// Supporting sentences stay stronger than the surrounding cited passage.
 	export let highlightSentences: string[] = [];
 	export let onHighlight: ((found: boolean) => void) | null = null;
 	let mappedSource: FileComment[] | null = null;
@@ -221,26 +227,51 @@
 		}
 	};
 
-	// Synchronous so a scroll queued in the same update already sees the new highlight.
-	const renderPassageHighlight = () => {
-		if (!sceneElement) return;
-		sceneElement.querySelectorAll('.passage-highlight-layer').forEach((layer) => layer.remove());
-		if (!highlightText) return;
+	// Per rendered page: filled-in form fields (not part of the text layer) and the CSS
+	// viewport that maps their PDF rects onto the page. Only collected when highlighting.
+	let pageFormFields = new Map<number, PdfFormField[]>();
+	let pageViewports = new Map<number, import('pdfjs-dist').PageViewport>();
 
-		const pageWrapper = targetPage
-			? sceneElement.querySelector<HTMLElement>(
-					`.pdf-page-wrapper[data-page-number="${targetPage}"]`
-				)
-			: null;
-		const ranges =
-			(pageWrapper && findPassageRanges(pageWrapper, highlightText, highlightSentences)) ||
-			findPassageRanges(sceneElement, highlightText, highlightSentences);
-		const wrapper =
-			ranges?.passage.startContainer.parentElement?.closest<HTMLElement>('.pdf-page-wrapper');
-		if (!ranges || !wrapper) {
-			onHighlight?.(false);
-			return;
+	const locatePassageOnPage = (wrapper: HTMLElement, text: string) => ({
+		wrapper,
+		...locateOnPage(wrapper, text, pageFormFields.get(Number(wrapper.dataset.pageNumber)) ?? [])
+	});
+
+	const drawPassageHighlight = (
+		{ wrapper, ranges, fields }: ReturnType<typeof locatePassageOnPage>,
+		kind: 'passage' | 'sentence' = 'passage',
+		background = '#90ee90'
+	) => {
+		const viewport = pageViewports.get(Number(wrapper.dataset.pageNumber));
+
+		// Text-layer rects come back in screen pixels; undo any panzoom scale on the scene
+		const bounds = wrapper.getBoundingClientRect();
+		const scale = bounds.width / wrapper.offsetWidth || 1;
+		// One rect per text-layer span; merged per line so word gaps are covered too
+		const boxes = mergeLineBoxes(
+			ranges.flatMap((range) =>
+				Array.from(range.getClientRects())
+					.filter((rect) => rect.width > 0 && rect.height > 0)
+					.map((rect) => ({
+						left: (rect.left - bounds.left) / scale,
+						top: (rect.top - bounds.top) / scale,
+						width: rect.width / scale,
+						height: rect.height / scale
+					}))
+			)
+		);
+		if (viewport) {
+			for (const field of fields) {
+				const [x1, y1, x2, y2] = viewport.convertToViewportRectangle(field.rect);
+				boxes.push({
+					left: Math.min(x1, x2),
+					top: Math.min(y1, y2),
+					width: Math.abs(x2 - x1),
+					height: Math.abs(y2 - y1)
+				});
+			}
 		}
+		if (boxes.length === 0) return;
 
 		const layer = document.createElement('div');
 		layer.className = 'passage-highlight-layer';
@@ -248,35 +279,73 @@
 			position: 'absolute',
 			inset: '0',
 			pointerEvents: 'none',
-			zIndex: '3'
+			zIndex: '3',
+			// Blend the whole layer: z-index makes it a stacking context, so a blend mode on
+			// the marks inside would only see the empty layer, not the page. Multiplying
+			// with the page keeps the text dark under an opaque color.
+			mixBlendMode: 'multiply'
 		});
-		// Rects come back in screen pixels; undo any panzoom scale applied to the scene
-		const bounds = wrapper.getBoundingClientRect();
-		const scale = bounds.width / wrapper.offsetWidth || 1;
-		const markRange = (range: Range, kind: 'passage' | 'sentence', background: string) => {
-			for (const rect of Array.from(range.getClientRects())) {
-				if (rect.width <= 0 || rect.height <= 0) continue;
-				const mark = document.createElement('div');
-				mark.setAttribute(`data-${kind}-highlight`, '');
-				Object.assign(mark.style, {
-					position: 'absolute',
-					left: `${(rect.left - bounds.left) / scale}px`,
-					top: `${(rect.top - bounds.top) / scale}px`,
-					width: `${rect.width / scale}px`,
-					height: `${rect.height / scale}px`,
-					borderRadius: '2px',
-					background,
-					mixBlendMode: 'multiply'
-				});
-				layer.appendChild(mark);
-			}
-		};
-		// With cited sentences found, the rest of the chunk stays faintly tinted for context
-		const emphasised = ranges.sentences.length > 0;
-		markRange(ranges.passage, 'passage', `rgba(250,204,21,${emphasised ? '.07' : '.18'})`);
-		for (const range of ranges.sentences) markRange(range, 'sentence', 'rgba(250,204,21,.3)');
+		for (const box of boxes) {
+			const mark = document.createElement('div');
+			mark.setAttribute(`data-${kind}-highlight`, '');
+			Object.assign(mark.style, {
+				position: 'absolute',
+				left: `${box.left}px`,
+				top: `${box.top}px`,
+				width: `${box.width}px`,
+				height: `${box.height}px`,
+				borderRadius: '2px',
+				background
+			});
+			layer.appendChild(mark);
+		}
 		wrapper.appendChild(layer);
-		onHighlight?.(layer.childElementCount > 0);
+	};
+
+	// Synchronous so a scroll queued in the same update already sees the new highlight.
+	const renderPassageHighlight = () => {
+		if (!sceneElement) return;
+		sceneElement.querySelectorAll('.passage-highlight-layer').forEach((layer) => layer.remove());
+		if (!highlightText) return;
+
+		const text = highlightText;
+		const wrappers = Array.from(sceneElement.querySelectorAll<HTMLElement>('.pdf-page-wrapper'));
+		const target = wrappers.find((wrapper) => Number(wrapper.dataset.pageNumber) === targetPage);
+		const targetMatch = target ? locatePassageOnPage(target, text) : null;
+
+		let matches = targetMatch && targetMatch.score > 0 ? [targetMatch] : [];
+		if (matches.length === 0) {
+			// No page given (e.g. a tool result) or nothing found on it: search every page.
+			// Captions repeated on every page would match line-by-line anywhere, so apart
+			// from the best page only pages with form fields or a whole passage count.
+			const found = wrappers
+				.map((wrapper) => locatePassageOnPage(wrapper, text))
+				.filter((match) => match.score > 0);
+			const best = found.reduce<(typeof found)[number] | null>(
+				(top, match) => (!top || match.score > top.score ? match : top),
+				null
+			);
+			matches = found.filter(
+				(match) => match === best || match.fields.length > 0 || match.contiguous
+			);
+		}
+		const supporting = matches.map((match) => ({
+			...match,
+			ranges: findPassageRanges(match.wrapper, text, highlightSentences)?.sentences ?? [],
+			fields: Array.from(
+				new Set(
+					highlightSentences.flatMap(
+						(sentence) => locateOnPage(match.wrapper, sentence, match.fields).fields
+					)
+				)
+			)
+		}));
+		const emphasised = supporting.some((match) => match.ranges.length || match.fields.length);
+		matches.forEach((match) =>
+			drawPassageHighlight(match, 'passage', emphasised ? '#d8f8d8' : '#90ee90')
+		);
+		if (emphasised) supporting.forEach((match) => drawPassageHighlight(match, 'sentence'));
+		onHighlight?.(matches.length > 0);
 	};
 
 	type PdfDocument = import('pdfjs-dist').PDFDocumentProxy;
@@ -597,6 +666,14 @@
 			if (token !== renderToken) return;
 			textLayerInstances.push(textLayer);
 
+			if (highlightText !== null) {
+				pageViewports.set(i, cssViewport);
+				if (!pageFormFields.has(i)) {
+					pageFormFields.set(i, formFieldsFromAnnotations(await page.getAnnotations()));
+					if (token !== renderToken) return;
+				}
+			}
+
 			wrappers.push(wrapper);
 		}
 
@@ -681,6 +758,8 @@
 		mappedDoc = null;
 		mappedSource = null;
 		comments = [];
+		pageFormFields = new Map();
+		pageViewports = new Map();
 
 		try {
 			const pdfjs = await import('pdfjs-dist');
@@ -749,7 +828,6 @@
 		void renderAllPages();
 	}
 
-	// Takes the sentences only so Svelte re-runs this when they arrive after the passage
 	const showPassage = (text: string | null, _sentences: string[]) => {
 		// Leave viewers that never highlight untouched
 		if (!text && !sceneElement?.querySelector('.passage-highlight-layer')) return;

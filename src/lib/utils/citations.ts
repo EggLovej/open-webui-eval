@@ -188,3 +188,198 @@ export const getCitationClaim = (marker: Element): string => {
 	}
 	return claimAround(before, after);
 };
+
+/**
+ * Line-by-line fallback for text that is not one contiguous run on the page (e.g. form
+ * labels interleaved with other content). Lines are matched in order; short lines are
+ * skipped since they match all over a page.
+ */
+export const locateLines = (
+	haystack: string,
+	lines: string[],
+	minLength = 6
+): [number, number][] => {
+	const spans: [number, number][] = [];
+	let from = 0;
+	for (const line of lines) {
+		if (line.length < minLength) continue;
+		const at = haystack.indexOf(line, from);
+		if (at < 0) continue;
+		const last = spans[spans.length - 1];
+		if (last && last[1] === at) last[1] = at + line.length;
+		else spans.push([at, at + line.length]);
+		from = at + line.length;
+	}
+	return spans;
+};
+
+// Same blank-line rule as label_segments in backend/open_webui/utils/middleware.py; an
+// explicit set, since JS trim() and Python strip() disagree on some Unicode whitespace.
+const SEGMENT_BLANK_LINE = /^[ \t\r\f\v]*$/;
+
+/** A chunk's segments, numbered from 1 like the [2#3] labels the model saw. */
+export const getSegments = (text: string): string[] =>
+	text.split('\n').filter((line) => !SEGMENT_BLANK_LINE.test(line));
+
+/** "3", "3-5" or "3-2#5" (models sometimes repeat the source id) to [start, end]. */
+export const parseSegmentRange = (suffix: string): [number, number] | null => {
+	const match = /^(\d+)(?:-(?:\d+#)?(\d+))?$/.exec(suffix.trim());
+	if (!match) return null;
+	const start = Number(match[1]);
+	const end = match[2] ? Number(match[2]) : start;
+	return start >= 1 && end >= start ? [start, end] : null;
+};
+
+/**
+ * The text a [id#suffix] citation points at, or null if it does not resolve (the caller
+ * then falls back to the whole chunk). Chunks are numbered by segment; tool results
+ * already carry line numbers ("166: ..."), which the model cites directly.
+ */
+export const resolveSegments = (text: string, suffix: string | null): string | null => {
+	const range = suffix ? parseSegmentRange(suffix) : null;
+	if (!range) return null;
+	const [start, end] = range;
+
+	if (stripLineNumbers(text) !== text) {
+		const picked = text.split('\n').filter((line) => {
+			const number = /^(\d+): /.exec(line);
+			return number && Number(number[1]) >= start && Number(number[1]) <= end;
+		});
+		return picked.length ? picked.map((line) => line.replace(/^\d+: /, '')).join('\n') : null;
+	}
+
+	const picked = getSegments(text).slice(start - 1, end);
+	return picked.length ? picked.join('\n') : null;
+};
+
+export type Box = { left: number; top: number; width: number; height: number };
+
+/**
+ * Join the rects of a highlighted range into one box per visual line. pdf.js puts each
+ * text run in its own span, so justified text leaves the spaces between words uncovered.
+ * Only boxes that share a line and sit within about a line height of each other merge,
+ * so a highlight spanning two columns does not bridge the gutter.
+ */
+export const mergeLineBoxes = (boxes: Box[]): Box[] => {
+	const merged: Box[] = [];
+	// Left to right, so each line grows rightwards even when its spans' tops differ slightly
+	const sorted = [...boxes].sort((a, b) => a.left - b.left || a.top - b.top);
+	for (const box of sorted) {
+		const line = merged.find((other) => {
+			const overlap =
+				Math.min(other.top + other.height, box.top + box.height) - Math.max(other.top, box.top);
+			const gap = Math.max(
+				box.left - (other.left + other.width),
+				other.left - (box.left + box.width),
+				0
+			);
+			return (
+				overlap >= Math.min(other.height, box.height) / 2 &&
+				gap <= Math.max(other.height, box.height) * 1.5
+			);
+		});
+		if (!line) {
+			merged.push({ ...box });
+			continue;
+		}
+		const right = Math.max(line.left + line.width, box.left + box.width);
+		const bottom = Math.max(line.top + line.height, box.top + box.height);
+		line.left = Math.min(line.left, box.left);
+		line.top = Math.min(line.top, box.top);
+		line.width = right - line.left;
+		line.height = bottom - line.top;
+	}
+	return merged;
+};
+
+/** Tool results (e.g. view_knowledge_file) prefix every line with its line number. */
+export const stripLineNumbers = (text: string): string => {
+	const lines = text.split('\n');
+	const nonEmpty = lines.filter((line) => line.trim());
+	const numbered = nonEmpty.filter((line) => /^\d+: /.test(line));
+	if (nonEmpty.length === 0 || numbered.length / nonEmpty.length < 0.8) return text;
+	return lines.map((line) => line.replace(/^\d+: /, '')).join('\n');
+};
+
+export type PdfFormField = { name: string; value: string; rect: number[] };
+
+/** Filled-in values from pdf.js page annotations, in the shape the backend writes them. */
+export const formFieldsFromAnnotations = (annotations: any[]): PdfFormField[] =>
+	annotations.flatMap((a) => {
+		if (a.subtype !== 'Widget' || !a.fieldName || !Array.isArray(a.rect)) return [];
+		let value = '';
+		if (a.checkBox) value = a.fieldValue && a.fieldValue !== 'Off' ? 'checked' : '';
+		else if (a.radioButton) value = a.fieldValue === a.buttonValue ? 'checked' : '';
+		else if (Array.isArray(a.fieldValue)) value = a.fieldValue.join(', ');
+		else if (typeof a.fieldValue === 'string') value = a.fieldValue;
+		value = value.trim();
+		// pdf.js gives the full "parent.child" name; the backend writes the widget's own name
+		const name = String(a.fieldName).split('.').pop() ?? '';
+		return value && name ? [{ name, value, rect: a.rect }] : [];
+	});
+
+/**
+ * Which form fields a cited text contains, matched against the "name: value" lines the
+ * backend PDF loader writes for them (backend/open_webui/retrieval/loaders/pdf.py).
+ * Also returns the cited text without those lines, to match against the page text.
+ */
+export const matchFormFields = (
+	text: string,
+	fields: PdfFormField[]
+): { matched: PdfFormField[]; rest: string } => {
+	const lines = text.split('\n').map(normalizeForMatch);
+	const lineSet = new Set(lines);
+	const covered = new Set<string>();
+	const matched = fields.filter((field) => {
+		const fieldLines = `${field.name}: ${field.value}`.split('\n').map(normalizeForMatch);
+		// A long multi-line value may be split across chunks, so its first line can be missing
+		const hit =
+			lineSet.has(fieldLines[0]) ||
+			fieldLines.slice(1).filter((line) => line.length >= 8 && lineSet.has(line)).length >= 2;
+		if (hit) fieldLines.forEach((line) => covered.add(line));
+		return hit;
+	});
+	const rest = text
+		.split('\n')
+		.filter((_, i) => !covered.has(lines[i]))
+		.join('\n');
+	return { matched, rest };
+};
+
+export type PageMatch = {
+	ranges: Range[];
+	fields: PdfFormField[];
+	// The text was found as one passage rather than as scattered lines
+	contiguous: boolean;
+	// Matched characters (normalized), for comparing pages
+	score: number;
+};
+
+/** Where cited text appears on one rendered PDF page: text-layer ranges and form fields. */
+export const locateOnPage = (
+	page: HTMLElement,
+	text: string,
+	fields: PdfFormField[]
+): PageMatch => {
+	const { matched, rest } = matchFormFields(text, fields);
+	const result: PageMatch = { ranges: [], fields: matched, contiguous: false, score: 0 };
+	for (const field of matched)
+		result.score += normalizeForMatch(`${field.name}:${field.value}`).length;
+
+	const needle = normalizeForMatch(rest);
+	if (needle) {
+		const index = indexTextLayers(page, '.textLayer');
+		const whole = locatePassage(index.text, needle);
+		const spans = whole
+			? [whole]
+			: locateLines(index.text, rest.split('\n').map(normalizeForMatch));
+		result.contiguous = !!whole;
+		for (const span of spans) {
+			const range = toRange(index, span);
+			if (!range) continue;
+			result.ranges.push(range);
+			result.score += span[1] - span[0];
+		}
+	}
+	return result;
+};

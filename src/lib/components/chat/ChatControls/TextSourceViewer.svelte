@@ -166,14 +166,14 @@
 		text-decoration: underline;
 	}
 	.source-text :global(mark) {
-		color: inherit;
+		color: #052e16;
 		border-radius: 2px;
 	}
 	.source-text :global(.source-highlight) {
-		background: rgba(250, 204, 21, 0.55);
+		background: #90ee90;
 	}
 	.source-text :global(.source-context) {
-		background: rgba(250, 204, 21, 0.18);
+		background: #d8f8d8;
 	}
 	.source-text :global(.hljs-keyword),
 	.source-text :global(.hljs-built_in) {
