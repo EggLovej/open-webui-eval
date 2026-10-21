@@ -10,7 +10,7 @@
 	} from '$lib/stores';
 	import { isValidHttpUrl } from '$lib/utils';
 
-	import { getCitationKey } from '$lib/utils/citations';
+	import { getCitationKey, stripLineNumbers } from '$lib/utils/citations';
 
 	import CitationModal from './Citations/CitationModal.svelte';
 
@@ -49,7 +49,7 @@
 				fileId: metadata.file_id,
 				name: decodeString(citation.source?.name ?? metadata.name ?? ''),
 				page: Number.isInteger(metadata.page) ? metadata.page + 1 : null,
-				text: citation.document?.[0] ?? ''
+				text: stripLineNumbers(citation.document?.[0] ?? '')
 			});
 			showControls.set(true);
 		} else {

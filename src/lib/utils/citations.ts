@@ -58,10 +58,91 @@ export const locatePassage = (haystack: string, needle: string): [number, number
 	return start >= 0 && end - start >= needle.length / 3 ? [start, end] : null;
 };
 
-/** DOM range covering `passage` inside the pdf.js text layers under `container`. */
-export const findPassageRange = (container: HTMLElement, passage: string): Range | null => {
-	const chars: Array<{ node: Text; offset: number; end: number }> = [];
-	let text = '';
+/**
+ * Line-by-line fallback for text that is not one contiguous run on the page (e.g. form
+ * labels interleaved with other content). Lines are matched in order; short lines are
+ * skipped since they match all over a page.
+ */
+export const locateLines = (
+	haystack: string,
+	lines: string[],
+	minLength = 6
+): [number, number][] => {
+	const spans: [number, number][] = [];
+	let from = 0;
+	for (const line of lines) {
+		if (line.length < minLength) continue;
+		const at = haystack.indexOf(line, from);
+		if (at < 0) continue;
+		const last = spans[spans.length - 1];
+		if (last && last[1] === at) last[1] = at + line.length;
+		else spans.push([at, at + line.length]);
+		from = at + line.length;
+	}
+	return spans;
+};
+
+/** Tool results (e.g. view_knowledge_file) prefix every line with its line number. */
+export const stripLineNumbers = (text: string): string => {
+	const lines = text.split('\n');
+	const nonEmpty = lines.filter((line) => line.trim());
+	const numbered = nonEmpty.filter((line) => /^\d+: /.test(line));
+	if (nonEmpty.length === 0 || numbered.length / nonEmpty.length < 0.8) return text;
+	return lines.map((line) => line.replace(/^\d+: /, '')).join('\n');
+};
+
+export type PdfFormField = { name: string; value: string; rect: number[] };
+
+/** Filled-in values from pdf.js page annotations, in the shape the backend writes them. */
+export const formFieldsFromAnnotations = (annotations: any[]): PdfFormField[] =>
+	annotations.flatMap((a) => {
+		if (a.subtype !== 'Widget' || !a.fieldName || !Array.isArray(a.rect)) return [];
+		let value = '';
+		if (a.checkBox) value = a.fieldValue && a.fieldValue !== 'Off' ? 'checked' : '';
+		else if (a.radioButton) value = a.fieldValue === a.buttonValue ? 'checked' : '';
+		else if (Array.isArray(a.fieldValue)) value = a.fieldValue.join(', ');
+		else if (typeof a.fieldValue === 'string') value = a.fieldValue;
+		value = value.trim();
+		// pdf.js gives the full "parent.child" name; the backend writes the widget's own name
+		const name = String(a.fieldName).split('.').pop() ?? '';
+		return value && name ? [{ name, value, rect: a.rect }] : [];
+	});
+
+/**
+ * Which form fields a cited text contains, matched against the "name: value" lines the
+ * backend PDF loader writes for them (backend/open_webui/retrieval/loaders/pdf.py).
+ * Also returns the cited text without those lines, to match against the page text.
+ */
+export const matchFormFields = (
+	text: string,
+	fields: PdfFormField[]
+): { matched: PdfFormField[]; rest: string } => {
+	const lines = text.split('\n').map(normalizeForMatch);
+	const lineSet = new Set(lines);
+	const covered = new Set<string>();
+	const matched = fields.filter((field) => {
+		const fieldLines = `${field.name}: ${field.value}`.split('\n').map(normalizeForMatch);
+		// A long multi-line value may be split across chunks, so its first line can be missing
+		const hit =
+			lineSet.has(fieldLines[0]) ||
+			fieldLines.slice(1).filter((line) => line.length >= 8 && lineSet.has(line)).length >= 2;
+		if (hit) fieldLines.forEach((line) => covered.add(line));
+		return hit;
+	});
+	const rest = text
+		.split('\n')
+		.filter((_, i) => !covered.has(lines[i]))
+		.join('\n');
+	return { matched, rest };
+};
+
+type TextLayerIndex = {
+	text: string;
+	chars: Array<{ node: Text; offset: number; end: number }>;
+};
+
+const indexTextLayer = (container: HTMLElement): TextLayerIndex => {
+	const index: TextLayerIndex = { text: '', chars: [] };
 	const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
 	let next: Node | null;
 	while ((next = walker.nextNode())) {
@@ -70,21 +151,59 @@ export const findPassageRange = (container: HTMLElement, passage: string): Range
 		let offset = 0;
 		for (const char of node.data) {
 			normalizedChars(char, (normalized) => {
-				text += normalized;
-				chars.push({ node, offset, end: offset + char.length });
+				index.text += normalized;
+				index.chars.push({ node, offset, end: offset + char.length });
 			});
 			offset += char.length;
 		}
 	}
+	return index;
+};
 
-	const match = locatePassage(text, normalizeForMatch(passage));
-	if (!match) return null;
-	const start = chars[match[0]];
-	const end = chars[match[1] - 1];
+const toRange = (index: TextLayerIndex, [startAt, endAt]: [number, number]): Range | null => {
+	const start = index.chars[startAt];
+	const end = index.chars[endAt - 1];
 	if (!start || !end) return null;
-
 	const range = document.createRange();
 	range.setStart(start.node, start.offset);
 	range.setEnd(end.node, end.end);
 	return range;
+};
+
+export type PageMatch = {
+	ranges: Range[];
+	fields: PdfFormField[];
+	// The text was found as one passage rather than as scattered lines
+	contiguous: boolean;
+	// Matched characters (normalized), for comparing pages
+	score: number;
+};
+
+/** Where cited text appears on one rendered PDF page: text-layer ranges and form fields. */
+export const locateOnPage = (
+	page: HTMLElement,
+	text: string,
+	fields: PdfFormField[]
+): PageMatch => {
+	const { matched, rest } = matchFormFields(text, fields);
+	const result: PageMatch = { ranges: [], fields: matched, contiguous: false, score: 0 };
+	for (const field of matched)
+		result.score += normalizeForMatch(`${field.name}:${field.value}`).length;
+
+	const needle = normalizeForMatch(rest);
+	if (needle) {
+		const index = indexTextLayer(page);
+		const whole = locatePassage(index.text, needle);
+		const spans = whole
+			? [whole]
+			: locateLines(index.text, rest.split('\n').map(normalizeForMatch));
+		result.contiguous = !!whole;
+		for (const span of spans) {
+			const range = toRange(index, span);
+			if (!range) continue;
+			result.ranges.push(range);
+			result.score += span[1] - span[0];
+		}
+	}
+	return result;
 };

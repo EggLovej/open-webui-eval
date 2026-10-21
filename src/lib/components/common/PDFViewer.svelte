@@ -8,7 +8,7 @@
 	import { mapWordComments, type PdfTextRun } from '$lib/utils/comments/pdfAnchors';
 	import { findTextRange, highlightRange, commentPin } from '$lib/utils/comments/highlights';
 	import type { FileComment, CommentResult } from '$lib/utils/comments/types';
-	import { findPassageRange } from '$lib/utils/citations';
+	import { formFieldsFromAnnotations, locateOnPage, type PdfFormField } from '$lib/utils/citations';
 
 	const i18n: any = getContext('i18n');
 
@@ -219,25 +219,48 @@
 		}
 	};
 
-	// Synchronous so a scroll queued in the same update already sees the new highlight.
-	const renderPassageHighlight = () => {
-		if (!sceneElement) return;
-		sceneElement.querySelectorAll('.passage-highlight-layer').forEach((layer) => layer.remove());
-		if (!highlightText) return;
+	// Per rendered page: filled-in form fields (not part of the text layer) and the CSS
+	// viewport that maps their PDF rects onto the page. Only collected when highlighting.
+	let pageFormFields = new Map<number, PdfFormField[]>();
+	let pageViewports = new Map<number, import('pdfjs-dist').PageViewport>();
 
-		const pageWrapper = targetPage
-			? sceneElement.querySelector<HTMLElement>(
-					`.pdf-page-wrapper[data-page-number="${targetPage}"]`
-				)
-			: null;
-		const range =
-			(pageWrapper && findPassageRange(pageWrapper, highlightText)) ||
-			findPassageRange(sceneElement, highlightText);
-		const wrapper = range?.startContainer.parentElement?.closest<HTMLElement>('.pdf-page-wrapper');
-		if (!range || !wrapper) {
-			onHighlight?.(false);
-			return;
+	const locatePassageOnPage = (wrapper: HTMLElement, text: string) => ({
+		wrapper,
+		...locateOnPage(wrapper, text, pageFormFields.get(Number(wrapper.dataset.pageNumber)) ?? [])
+	});
+
+	const drawPassageHighlight = ({
+		wrapper,
+		ranges,
+		fields
+	}: ReturnType<typeof locatePassageOnPage>) => {
+		const viewport = pageViewports.get(Number(wrapper.dataset.pageNumber));
+
+		// Text-layer rects come back in screen pixels; undo any panzoom scale on the scene
+		const bounds = wrapper.getBoundingClientRect();
+		const scale = bounds.width / wrapper.offsetWidth || 1;
+		const boxes = ranges.flatMap((range) =>
+			Array.from(range.getClientRects())
+				.filter((rect) => rect.width > 0 && rect.height > 0)
+				.map((rect) => ({
+					left: (rect.left - bounds.left) / scale,
+					top: (rect.top - bounds.top) / scale,
+					width: rect.width / scale,
+					height: rect.height / scale
+				}))
+		);
+		if (viewport) {
+			for (const field of fields) {
+				const [x1, y1, x2, y2] = viewport.convertToViewportRectangle(field.rect);
+				boxes.push({
+					left: Math.min(x1, x2),
+					top: Math.min(y1, y2),
+					width: Math.abs(x2 - x1),
+					height: Math.abs(y2 - y1)
+				});
+			}
 		}
+		if (boxes.length === 0) return;
 
 		const layer = document.createElement('div');
 		layer.className = 'passage-highlight-layer';
@@ -247,19 +270,15 @@
 			pointerEvents: 'none',
 			zIndex: '3'
 		});
-		// Rects come back in screen pixels; undo any panzoom scale applied to the scene
-		const bounds = wrapper.getBoundingClientRect();
-		const scale = bounds.width / wrapper.offsetWidth || 1;
-		for (const rect of Array.from(range.getClientRects())) {
-			if (rect.width <= 0 || rect.height <= 0) continue;
+		for (const box of boxes) {
 			const mark = document.createElement('div');
 			mark.dataset.passageHighlight = '';
 			Object.assign(mark.style, {
 				position: 'absolute',
-				left: `${(rect.left - bounds.left) / scale}px`,
-				top: `${(rect.top - bounds.top) / scale}px`,
-				width: `${rect.width / scale}px`,
-				height: `${rect.height / scale}px`,
+				left: `${box.left}px`,
+				top: `${box.top}px`,
+				width: `${box.width}px`,
+				height: `${box.height}px`,
 				borderRadius: '2px',
 				background: 'rgba(250,204,21,.18)',
 				mixBlendMode: 'multiply'
@@ -267,7 +286,37 @@
 			layer.appendChild(mark);
 		}
 		wrapper.appendChild(layer);
-		onHighlight?.(layer.childElementCount > 0);
+	};
+
+	// Synchronous so a scroll queued in the same update already sees the new highlight.
+	const renderPassageHighlight = () => {
+		if (!sceneElement) return;
+		sceneElement.querySelectorAll('.passage-highlight-layer').forEach((layer) => layer.remove());
+		if (!highlightText) return;
+
+		const text = highlightText;
+		const wrappers = Array.from(sceneElement.querySelectorAll<HTMLElement>('.pdf-page-wrapper'));
+		const target = wrappers.find((wrapper) => Number(wrapper.dataset.pageNumber) === targetPage);
+		const targetMatch = target ? locatePassageOnPage(target, text) : null;
+
+		let matches = targetMatch && targetMatch.score > 0 ? [targetMatch] : [];
+		if (matches.length === 0) {
+			// No page given (e.g. a tool result) or nothing found on it: search every page.
+			// Captions repeated on every page would match line-by-line anywhere, so apart
+			// from the best page only pages with form fields or a whole passage count.
+			const found = wrappers
+				.map((wrapper) => locatePassageOnPage(wrapper, text))
+				.filter((match) => match.score > 0);
+			const best = found.reduce<(typeof found)[number] | null>(
+				(top, match) => (!top || match.score > top.score ? match : top),
+				null
+			);
+			matches = found.filter(
+				(match) => match === best || match.fields.length > 0 || match.contiguous
+			);
+		}
+		matches.forEach(drawPassageHighlight);
+		onHighlight?.(matches.length > 0);
 	};
 
 	type PdfDocument = import('pdfjs-dist').PDFDocumentProxy;
@@ -586,6 +635,14 @@
 			if (token !== renderToken) return;
 			textLayerInstances.push(textLayer);
 
+			if (highlightText !== null) {
+				pageViewports.set(i, cssViewport);
+				if (!pageFormFields.has(i)) {
+					pageFormFields.set(i, formFieldsFromAnnotations(await page.getAnnotations()));
+					if (token !== renderToken) return;
+				}
+			}
+
 			wrappers.push(wrapper);
 		}
 
@@ -670,6 +727,8 @@
 		mappedDoc = null;
 		mappedSource = null;
 		comments = [];
+		pageFormFields = new Map();
+		pageViewports = new Map();
 
 		try {
 			const pdfjs = await import('pdfjs-dist');

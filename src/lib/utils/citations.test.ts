@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { getCitationKey, locatePassage, normalizeForMatch } from './citations';
+import {
+	formFieldsFromAnnotations,
+	getCitationKey,
+	locateLines,
+	locatePassage,
+	matchFormFields,
+	normalizeForMatch,
+	stripLineNumbers
+} from './citations';
 
 describe('getCitationKey', () => {
 	const source = { source: { id: 'file-1', name: 'paper.pdf' } };
@@ -68,5 +76,79 @@ describe('locatePassage', () => {
 			'Completely unrelated sentence about milk yield and feeding schedules in winter barns.'
 		);
 		expect(locatePassage(page, needle)).toBeNull();
+	});
+});
+
+describe('stripLineNumbers', () => {
+	it('removes line-number prefixes from tool output', () => {
+		expect(stripLineNumbers('160: STR: 18\n161: DEX: 16\n')).toBe('STR: 18\nDEX: 16\n');
+	});
+
+	it('leaves normal text alone', () => {
+		const text = 'Eq Name11: Fragment\nEq Qty11: 1\n12: not a numbered block';
+		expect(stripLineNumbers(text)).toBe(text);
+	});
+});
+
+describe('formFieldsFromAnnotations', () => {
+	const widget = (extra: object) => ({ subtype: 'Widget', rect: [0, 0, 10, 10], ...extra });
+
+	it('reads text, checkbox, radio and list values like the backend loader', () => {
+		const fields = formFieldsFromAnnotations([
+			widget({ fieldName: 'STR', fieldValue: ' 18 ' }),
+			widget({ fieldName: 'StrProf', checkBox: true, fieldValue: 'Yes' }),
+			widget({ fieldName: 'Unticked', checkBox: true, fieldValue: 'Off' }),
+			widget({ fieldName: 'Align', radioButton: true, fieldValue: 'Good', buttonValue: 'Good' }),
+			widget({ fieldName: 'Align', radioButton: true, fieldValue: 'Good', buttonValue: 'Evil' }),
+			widget({ fieldName: 'Langs', fieldValue: ['Common', 'Draconic'] }),
+			widget({ fieldName: 'parent.Kid', fieldValue: 'x' }),
+			widget({ fieldName: 'Empty', fieldValue: '' }),
+			{ subtype: 'Link', rect: [0, 0, 1, 1] }
+		]);
+		expect(fields.map((f) => `${f.name}: ${f.value}`)).toEqual([
+			'STR: 18',
+			'StrProf: checked',
+			'Align: checked',
+			'Langs: Common, Draconic',
+			'Kid: x'
+		]);
+	});
+});
+
+describe('matchFormFields', () => {
+	const field = (name: string, value: string) => ({ name, value, rect: [0, 0, 1, 1] });
+	const fields = [
+		field('STR', '18'),
+		field('DEX', '16'),
+		field('Eq Qty1', '1'),
+		field('Features', 'Second Wind\nYou have a limited well of stamina.\nAction Surge recharges.')
+	];
+
+	it('matches fields by their "name: value" line and returns the remaining text', () => {
+		const { matched, rest } = matchFormFields('STRENGTH\nSTR: 18\nDEX: 16\nSKILLS', fields);
+		expect(matched.map((f) => f.name)).toEqual(['STR', 'DEX']);
+		expect(rest).toBe('STRENGTH\nSKILLS');
+	});
+
+	it('does not match a field whose value differs or whose name is only a prefix', () => {
+		expect(matchFormFields('Eq Qty11: 1\nSTR: 180', fields).matched).toEqual([]);
+	});
+
+	it('matches a multi-line value even when the chunk starts mid-value', () => {
+		const chunk = 'You have a limited well of stamina.\nAction Surge recharges.\nDEX: 16';
+		expect(matchFormFields(chunk, fields).matched.map((f) => f.name)).toEqual(['DEX', 'Features']);
+	});
+});
+
+describe('locateLines', () => {
+	it('matches lines in order, merges adjacent ones and skips short lines', () => {
+		const page = normalizeForMatch('CHARACTER NAME EXPERIENCE POINTS STRENGTH SKILLS');
+		const lines = ['CHARACTER NAME', 'EXPERIENCE POINTS', 'AC', 'SKILLS', 'NOT ON PAGE'].map(
+			normalizeForMatch
+		);
+		expect(locateLines(page, lines)).toEqual([
+			[0, 29],
+			[37, 43]
+		]);
 	});
 });
