@@ -8,7 +8,12 @@
 	import { mapWordComments, type PdfTextRun } from '$lib/utils/comments/pdfAnchors';
 	import { findTextRange, highlightRange, commentPin } from '$lib/utils/comments/highlights';
 	import type { FileComment, CommentResult } from '$lib/utils/comments/types';
-	import { formFieldsFromAnnotations, locateOnPage, type PdfFormField } from '$lib/utils/citations';
+	import {
+		formFieldsFromAnnotations,
+		locateOnPage,
+		mergeLineBoxes,
+		type PdfFormField
+	} from '$lib/utils/citations';
 
 	const i18n: any = getContext('i18n');
 
@@ -239,15 +244,18 @@
 		// Text-layer rects come back in screen pixels; undo any panzoom scale on the scene
 		const bounds = wrapper.getBoundingClientRect();
 		const scale = bounds.width / wrapper.offsetWidth || 1;
-		const boxes = ranges.flatMap((range) =>
-			Array.from(range.getClientRects())
-				.filter((rect) => rect.width > 0 && rect.height > 0)
-				.map((rect) => ({
-					left: (rect.left - bounds.left) / scale,
-					top: (rect.top - bounds.top) / scale,
-					width: rect.width / scale,
-					height: rect.height / scale
-				}))
+		// One rect per text-layer span; merged per line so word gaps are covered too
+		const boxes = mergeLineBoxes(
+			ranges.flatMap((range) =>
+				Array.from(range.getClientRects())
+					.filter((rect) => rect.width > 0 && rect.height > 0)
+					.map((rect) => ({
+						left: (rect.left - bounds.left) / scale,
+						top: (rect.top - bounds.top) / scale,
+						width: rect.width / scale,
+						height: rect.height / scale
+					}))
+			)
 		);
 		if (viewport) {
 			for (const field of fields) {
@@ -268,7 +276,11 @@
 			position: 'absolute',
 			inset: '0',
 			pointerEvents: 'none',
-			zIndex: '3'
+			zIndex: '3',
+			// Blend the whole layer: z-index makes it a stacking context, so a blend mode on
+			// the marks inside would only see the empty layer, not the page. Multiplying
+			// with the page keeps the text dark under an opaque color.
+			mixBlendMode: 'multiply'
 		});
 		for (const box of boxes) {
 			const mark = document.createElement('div');
@@ -280,8 +292,7 @@
 				width: `${box.width}px`,
 				height: `${box.height}px`,
 				borderRadius: '2px',
-				background: 'rgba(250,204,21,.18)',
-				mixBlendMode: 'multiply'
+				background: '#90ee90'
 			});
 			layer.appendChild(mark);
 		}

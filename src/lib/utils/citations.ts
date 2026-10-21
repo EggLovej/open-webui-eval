@@ -121,6 +121,46 @@ export const resolveSegments = (text: string, suffix: string | null): string | n
 	return picked.length ? picked.join('\n') : null;
 };
 
+export type Box = { left: number; top: number; width: number; height: number };
+
+/**
+ * Join the rects of a highlighted range into one box per visual line. pdf.js puts each
+ * text run in its own span, so justified text leaves the spaces between words uncovered.
+ * Only boxes that share a line and sit within about a line height of each other merge,
+ * so a highlight spanning two columns does not bridge the gutter.
+ */
+export const mergeLineBoxes = (boxes: Box[]): Box[] => {
+	const merged: Box[] = [];
+	// Left to right, so each line grows rightwards even when its spans' tops differ slightly
+	const sorted = [...boxes].sort((a, b) => a.left - b.left || a.top - b.top);
+	for (const box of sorted) {
+		const line = merged.find((other) => {
+			const overlap =
+				Math.min(other.top + other.height, box.top + box.height) - Math.max(other.top, box.top);
+			const gap = Math.max(
+				box.left - (other.left + other.width),
+				other.left - (box.left + box.width),
+				0
+			);
+			return (
+				overlap >= Math.min(other.height, box.height) / 2 &&
+				gap <= Math.max(other.height, box.height) * 1.5
+			);
+		});
+		if (!line) {
+			merged.push({ ...box });
+			continue;
+		}
+		const right = Math.max(line.left + line.width, box.left + box.width);
+		const bottom = Math.max(line.top + line.height, box.top + box.height);
+		line.left = Math.min(line.left, box.left);
+		line.top = Math.min(line.top, box.top);
+		line.width = right - line.left;
+		line.height = bottom - line.top;
+	}
+	return merged;
+};
+
 /** Tool results (e.g. view_knowledge_file) prefix every line with its line number. */
 export const stripLineNumbers = (text: string): string => {
 	const lines = text.split('\n');

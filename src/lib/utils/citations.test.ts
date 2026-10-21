@@ -6,6 +6,7 @@ import {
 	locateLines,
 	locatePassage,
 	matchFormFields,
+	mergeLineBoxes,
 	normalizeForMatch,
 	parseSegmentRange,
 	resolveSegments,
@@ -186,5 +187,28 @@ describe('segments', () => {
 			'Wpn Name: Adamantine Longsword, +1\nWpn1 AtkBonus: +7'
 		);
 		expect(resolveSegments(tool, '2')).toBeNull();
+	});
+});
+
+describe('mergeLineBoxes', () => {
+	const box = (left: number, top: number, width: number, height = 12) => ({
+		left,
+		top,
+		width,
+		height
+	});
+
+	it('joins the word spans of a justified line into one box', () => {
+		expect(mergeLineBoxes([box(0, 0, 40), box(52, 0.5, 30), box(95, 0, 60)])).toEqual([
+			{ left: 0, top: 0, width: 155, height: 12.5 }
+		]);
+	});
+
+	it('keeps separate lines separate', () => {
+		expect(mergeLineBoxes([box(0, 0, 100), box(0, 14, 80)])).toHaveLength(2);
+	});
+
+	it('does not bridge a column gutter', () => {
+		expect(mergeLineBoxes([box(0, 0, 200), box(240, 0, 200)])).toHaveLength(2);
 	});
 });
