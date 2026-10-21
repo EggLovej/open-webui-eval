@@ -877,11 +877,11 @@
 										console.log(e);
 									}}
 									{onToolCallResolved}
-									onSourceClick={async (id) => {
+									onSourceClick={async (id, claim) => {
 										console.log(id);
 
 										if (citationsElement) {
-											citationsElement?.showSourceModal(id);
+											citationsElement?.showSourceModal(id, claim);
 										}
 									}}
 									onSetInputText={(text) => {
@@ -930,6 +930,7 @@
 									bind:this={citationsElement}
 									id={message?.id}
 									{chatId}
+									model={message?.model}
 									sources={message?.sources ?? message?.citations}
 									{readOnly}
 								/>

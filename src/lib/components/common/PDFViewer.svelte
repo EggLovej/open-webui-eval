@@ -10,6 +10,7 @@
 	import type { FileComment, CommentResult } from '$lib/utils/comments/types';
 	import {
 		formFieldsFromAnnotations,
+		findPassageRanges,
 		locateOnPage,
 		mergeLineBoxes,
 		type PdfFormField
@@ -32,6 +33,8 @@
 	export let onAnchors: ((ids: string[]) => void) | null = null;
 	// Passage to highlight and scroll to (e.g. a cited chunk); searched on targetPage first.
 	export let highlightText: string | null = null;
+	// Supporting sentences stay stronger than the surrounding cited passage.
+	export let highlightSentences: string[] = [];
 	export let onHighlight: ((found: boolean) => void) | null = null;
 	let mappedSource: FileComment[] | null = null;
 	let mappedDoc: PdfDocument | null = null;
@@ -234,11 +237,11 @@
 		...locateOnPage(wrapper, text, pageFormFields.get(Number(wrapper.dataset.pageNumber)) ?? [])
 	});
 
-	const drawPassageHighlight = ({
-		wrapper,
-		ranges,
-		fields
-	}: ReturnType<typeof locatePassageOnPage>) => {
+	const drawPassageHighlight = (
+		{ wrapper, ranges, fields }: ReturnType<typeof locatePassageOnPage>,
+		kind: 'passage' | 'sentence' = 'passage',
+		background = '#90ee90'
+	) => {
 		const viewport = pageViewports.get(Number(wrapper.dataset.pageNumber));
 
 		// Text-layer rects come back in screen pixels; undo any panzoom scale on the scene
@@ -284,7 +287,7 @@
 		});
 		for (const box of boxes) {
 			const mark = document.createElement('div');
-			mark.dataset.passageHighlight = '';
+			mark.setAttribute(`data-${kind}-highlight`, '');
 			Object.assign(mark.style, {
 				position: 'absolute',
 				left: `${box.left}px`,
@@ -292,7 +295,7 @@
 				width: `${box.width}px`,
 				height: `${box.height}px`,
 				borderRadius: '2px',
-				background: '#90ee90'
+				background
 			});
 			layer.appendChild(mark);
 		}
@@ -326,7 +329,22 @@
 				(match) => match === best || match.fields.length > 0 || match.contiguous
 			);
 		}
-		matches.forEach(drawPassageHighlight);
+		const supporting = matches.map((match) => ({
+			...match,
+			ranges: findPassageRanges(match.wrapper, text, highlightSentences)?.sentences ?? [],
+			fields: Array.from(
+				new Set(
+					highlightSentences.flatMap(
+						(sentence) => locateOnPage(match.wrapper, sentence, match.fields).fields
+					)
+				)
+			)
+		}));
+		const emphasised = supporting.some((match) => match.ranges.length || match.fields.length);
+		matches.forEach((match) =>
+			drawPassageHighlight(match, 'passage', emphasised ? '#d8f8d8' : '#90ee90')
+		);
+		if (emphasised) supporting.forEach((match) => drawPassageHighlight(match, 'sentence'));
 		onHighlight?.(matches.length > 0);
 	};
 
@@ -472,7 +490,9 @@
 		const pageWrapper = sceneElement.querySelectorAll('.pdf-page-wrapper')[page - 1] as
 			| HTMLElement
 			| undefined;
-		const passage = sceneElement.querySelector<HTMLElement>('[data-passage-highlight]');
+		const passage =
+			sceneElement.querySelector<HTMLElement>('[data-sentence-highlight]') ??
+			sceneElement.querySelector<HTMLElement>('[data-passage-highlight]');
 		if (passage) {
 			passage.scrollIntoView({ block: 'center' });
 		} else {
@@ -808,14 +828,14 @@
 		void renderAllPages();
 	}
 
-	const showPassage = (text: string | null) => {
+	const showPassage = (text: string | null, _sentences: string[]) => {
 		// Leave viewers that never highlight untouched
 		if (!text && !sceneElement?.querySelector('.passage-highlight-layer')) return;
 		renderPassageHighlight();
 		void scrollToTargetPage();
 	};
 
-	$: if (!loading && pdfDoc) showPassage(highlightText);
+	$: if (!loading && pdfDoc) showPassage(highlightText, highlightSentences);
 
 	$: if (!loading && pdfDoc && !singlePage && targetPage) {
 		void scrollToTargetPage();

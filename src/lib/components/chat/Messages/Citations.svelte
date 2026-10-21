@@ -18,6 +18,7 @@
 
 	export let id = '';
 	export let chatId = '';
+	export let model = '';
 
 	export let sources = [];
 	export let readOnly = false;
@@ -38,20 +39,24 @@
 		(metadata?.content_type === 'application/pdf' ||
 			/\.pdf$/i.test(metadata?.name ?? metadata?.source ?? ''));
 
-	// PDF chunks open next to the chat with the passage highlighted; anything else
-	// (web results, other file types, read-only views without a side panel) uses the modal.
-	// segment: the part after '#' in [2#3-5], narrowing the highlight to those segments
-	const openCitation = (citation, segment: string | null = null) => {
+	// File chunks open next to the chat; web results and views without a side panel use the modal.
+	// `claim` is the sentence an inline [n] backs; the citation list below has none.
+	const openCitation = (citation, claim = '', segment: string | null = null) => {
 		const metadata = citation?.metadata?.[0];
-		if (!readOnly && $sourceViewerAvailable && isPdfChunk(metadata)) {
+		if (!readOnly && $sourceViewerAvailable && metadata?.file_id) {
 			const chunk = citation.document?.[0] ?? '';
+			const selected = resolveSegments(chunk, segment);
 			showArtifacts.set(false);
 			showEmbeds.set(false);
 			sourceViewer.set({
 				fileId: metadata.file_id,
+				format: isPdfChunk(metadata) ? 'pdf' : 'text',
 				name: decodeString(citation.source?.name ?? metadata.name ?? ''),
 				page: Number.isInteger(metadata.page) ? metadata.page + 1 : null,
-				text: resolveSegments(chunk, segment) ?? stripLineNumbers(chunk)
+				text: selected ?? stripLineNumbers(chunk),
+				claim: selected ? null : claim || null,
+				model: model || null,
+				chatId: chatId || null
 			});
 			showControls.set(true);
 		} else {
@@ -60,7 +65,7 @@
 		}
 	};
 
-	export const showSourceModal = (sourceId) => {
+	export const showSourceModal = (sourceId, claim = '') => {
 		let index;
 		let suffix = null;
 
@@ -69,7 +74,6 @@
 			index = parseInt(output[0]) - 1;
 
 			if (output.length > 1) {
-				// Keep everything after the first '#', e.g. "3-2#5" in [2#3-2#5]
 				suffix = output.slice(1).join('#');
 			}
 		} else {
@@ -107,7 +111,7 @@
 					showCitationModal = true;
 				}
 			} else {
-				openCitation(citations[index], suffix);
+				openCitation(citations[index], claim, suffix);
 			}
 		}
 	};

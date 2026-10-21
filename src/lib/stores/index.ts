@@ -181,8 +181,13 @@ export const embed = writable(null);
 export type SourceViewerState = {
 	fileId: string;
 	name: string;
+	format?: 'pdf' | 'text';
 	page: number | null; // 1-based
 	text: string;
+	// Sentence an inline citation backs; the model is asked which sentences of `text` support it
+	claim: string | null;
+	model: string | null;
+	chatId: string | null;
 };
 export const sourceViewer: Writable<SourceViewerState | null> = writable(null);
 // True while ChatControls is mounted, i.e. there is a side panel to open the source in.

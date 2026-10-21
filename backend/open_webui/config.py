@@ -2393,6 +2393,32 @@ Strictly return in JSON format:
 </chat_history>
 """
 
+DEFAULT_CITATION_HIGHLIGHT_PROMPT_TEMPLATE = """### Task:
+A response cited the passage below as support for the claim. Identify which of the passage's numbered sentences actually back the claim, so they can be highlighted in the source document.
+
+### Guidelines:
+- Select the fewest sentences that together support the claim. They do not need to be next to each other.
+- Select a sentence only if the claim relies on what it says, not because it covers the same topic.
+- If no sentence supports the claim, return an empty list.
+- Respond **EXCLUSIVELY** with a JSON object. Any form of extra commentary or explanation is strictly prohibited.
+
+### Output:
+Strictly return in JSON format:
+{
+  "sentences": [1, 3]
+}
+
+### Claim:
+<claim>
+{{CLAIM}}
+</claim>
+
+### Passage:
+<passage>
+{{SENTENCES}}
+</passage>
+"""
+
 ENABLE_AUTOCOMPLETE_GENERATION = os.getenv('ENABLE_AUTOCOMPLETE_GENERATION', 'False').lower() == 'true'
 
 AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH = int(os.getenv('AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH', '-1'))

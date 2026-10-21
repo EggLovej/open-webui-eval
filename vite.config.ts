@@ -33,7 +33,7 @@ export default defineConfig({
 		APP_BUILD_CHANNEL: JSON.stringify(buildInfo.channel)
 	},
 	build: {
-		sourcemap: true
+		sourcemap: process.env.BUILD_SOURCEMAP !== 'false'
 	},
 	server: {
 		proxy: {
