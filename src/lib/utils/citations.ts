@@ -82,6 +82,45 @@ export const locateLines = (
 	return spans;
 };
 
+// Same blank-line rule as label_segments in backend/open_webui/utils/middleware.py; an
+// explicit set, since JS trim() and Python strip() disagree on some Unicode whitespace.
+const SEGMENT_BLANK_LINE = /^[ \t\r\f\v]*$/;
+
+/** A chunk's segments, numbered from 1 like the [2#3] labels the model saw. */
+export const getSegments = (text: string): string[] =>
+	text.split('\n').filter((line) => !SEGMENT_BLANK_LINE.test(line));
+
+/** "3", "3-5" or "3-2#5" (models sometimes repeat the source id) to [start, end]. */
+export const parseSegmentRange = (suffix: string): [number, number] | null => {
+	const match = /^(\d+)(?:-(?:\d+#)?(\d+))?$/.exec(suffix.trim());
+	if (!match) return null;
+	const start = Number(match[1]);
+	const end = match[2] ? Number(match[2]) : start;
+	return start >= 1 && end >= start ? [start, end] : null;
+};
+
+/**
+ * The text a [id#suffix] citation points at, or null if it does not resolve (the caller
+ * then falls back to the whole chunk). Chunks are numbered by segment; tool results
+ * already carry line numbers ("166: ..."), which the model cites directly.
+ */
+export const resolveSegments = (text: string, suffix: string | null): string | null => {
+	const range = suffix ? parseSegmentRange(suffix) : null;
+	if (!range) return null;
+	const [start, end] = range;
+
+	if (stripLineNumbers(text) !== text) {
+		const picked = text.split('\n').filter((line) => {
+			const number = /^(\d+): /.exec(line);
+			return number && Number(number[1]) >= start && Number(number[1]) <= end;
+		});
+		return picked.length ? picked.map((line) => line.replace(/^\d+: /, '')).join('\n') : null;
+	}
+
+	const picked = getSegments(text).slice(start - 1, end);
+	return picked.length ? picked.join('\n') : null;
+};
+
 /** Tool results (e.g. view_knowledge_file) prefix every line with its line number. */
 export const stripLineNumbers = (text: string): string => {
 	const lines = text.split('\n');

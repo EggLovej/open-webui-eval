@@ -10,7 +10,7 @@
 	} from '$lib/stores';
 	import { isValidHttpUrl } from '$lib/utils';
 
-	import { getCitationKey, stripLineNumbers } from '$lib/utils/citations';
+	import { getCitationKey, resolveSegments, stripLineNumbers } from '$lib/utils/citations';
 
 	import CitationModal from './Citations/CitationModal.svelte';
 
@@ -40,16 +40,18 @@
 
 	// PDF chunks open next to the chat with the passage highlighted; anything else
 	// (web results, other file types, read-only views without a side panel) uses the modal.
-	const openCitation = (citation) => {
+	// segment: the part after '#' in [2#3-5], narrowing the highlight to those segments
+	const openCitation = (citation, segment: string | null = null) => {
 		const metadata = citation?.metadata?.[0];
 		if (!readOnly && $sourceViewerAvailable && isPdfChunk(metadata)) {
+			const chunk = citation.document?.[0] ?? '';
 			showArtifacts.set(false);
 			showEmbeds.set(false);
 			sourceViewer.set({
 				fileId: metadata.file_id,
 				name: decodeString(citation.source?.name ?? metadata.name ?? ''),
 				page: Number.isInteger(metadata.page) ? metadata.page + 1 : null,
-				text: stripLineNumbers(citation.document?.[0] ?? '')
+				text: resolveSegments(chunk, segment) ?? stripLineNumbers(chunk)
 			});
 			showControls.set(true);
 		} else {
@@ -67,7 +69,8 @@
 			index = parseInt(output[0]) - 1;
 
 			if (output.length > 1) {
-				suffix = output[1];
+				// Keep everything after the first '#', e.g. "3-2#5" in [2#3-2#5]
+				suffix = output.slice(1).join('#');
 			}
 		} else {
 			index = sourceId - 1;
@@ -104,7 +107,7 @@
 					showCitationModal = true;
 				}
 			} else {
-				openCitation(citations[index]);
+				openCitation(citations[index], suffix);
 			}
 		}
 	};

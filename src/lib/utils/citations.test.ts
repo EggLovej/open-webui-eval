@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
 	formFieldsFromAnnotations,
 	getCitationKey,
+	getSegments,
 	locateLines,
 	locatePassage,
 	matchFormFields,
 	normalizeForMatch,
+	parseSegmentRange,
+	resolveSegments,
 	stripLineNumbers
 } from './citations';
 
@@ -150,5 +153,38 @@ describe('locateLines', () => {
 			[0, 29],
 			[37, 43]
 		]);
+	});
+});
+
+describe('segments', () => {
+	const chunk = 'STRENGTH\n\nSTR: 18\n   \nDEX: 16\n\fAC: 16';
+
+	it('numbers non-blank lines from 1, skipping blank and whitespace-only lines', () => {
+		expect(getSegments(chunk)).toEqual(['STRENGTH', 'STR: 18', 'DEX: 16', '\fAC: 16']);
+	});
+
+	it('parses single segments, ranges and ranges that repeat the source id', () => {
+		expect(parseSegmentRange('3')).toEqual([3, 3]);
+		expect(parseSegmentRange('3-5')).toEqual([3, 5]);
+		expect(parseSegmentRange('3-2#5')).toEqual([3, 5]);
+		expect(parseSegmentRange('5-3')).toBeNull();
+		expect(parseSegmentRange('0')).toBeNull();
+		expect(parseSegmentRange('abc')).toBeNull();
+	});
+
+	it('resolves a citation suffix to the cited segments', () => {
+		expect(resolveSegments(chunk, '2')).toBe('STR: 18');
+		expect(resolveSegments(chunk, '2-3')).toBe('STR: 18\nDEX: 16');
+		expect(resolveSegments(chunk, '9')).toBeNull();
+		expect(resolveSegments(chunk, null)).toBeNull();
+	});
+
+	it('resolves tool-result line numbers instead of segment positions', () => {
+		const tool =
+			'165: Passive1: 14\n166: Wpn Name: Adamantine Longsword, +1\n167: Wpn1 AtkBonus: +7';
+		expect(resolveSegments(tool, '166-167')).toBe(
+			'Wpn Name: Adamantine Longsword, +1\nWpn1 AtkBonus: +7'
+		);
+		expect(resolveSegments(tool, '2')).toBeNull();
 	});
 });
