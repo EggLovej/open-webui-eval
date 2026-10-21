@@ -3,7 +3,16 @@
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 	import { formatFileSize, safeLinkUrl } from '$lib/utils';
-	import { settings, showFileNavPath } from '$lib/stores';
+	import {
+		settings,
+		showFileNavPath,
+		showControls,
+		showArtifacts,
+		showEmbeds,
+		sourceViewer,
+		sourceViewerAvailable
+	} from '$lib/stores';
+	import { getDocumentPreview } from '$lib/utils/documentSources';
 
 	import FileItemModal from './FileItemModal.svelte';
 	import GarbageBin from '../icons/GarbageBin.svelte';
@@ -58,9 +67,18 @@
 	type="button"
 	on:click={async () => {
 		const filesystemPath = item?.type === 'filesystem' ? (item.path ?? item.url ?? item.id) : null;
+		const document =
+			!loading && $sourceViewerAvailable
+				? getDocumentPreview({ ...item, type: item?.type ?? type, name: item?.name ?? name })
+				: null;
 
 		if (filesystemPath) {
 			showFileNavPath.set(filesystemPath);
+		} else if (document) {
+			showArtifacts.set(false);
+			showEmbeds.set(false);
+			sourceViewer.set(document);
+			showControls.set(true);
 		} else if (item?.file?.data?.content || item?.type === 'file' || item?.content || modal) {
 			showModal = !showModal;
 		} else {

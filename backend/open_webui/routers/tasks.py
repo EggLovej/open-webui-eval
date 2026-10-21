@@ -4,9 +4,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
+from langchain_core.documents import Document
 from open_webui.config import (
     AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH,
     DEFAULT_AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE,
+    DEFAULT_CITATION_HIGHLIGHT_PROMPT_TEMPLATE,
     DEFAULT_EMOJI_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_FOLLOW_UP_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE,
@@ -18,9 +20,11 @@ from open_webui.config import (
 )
 from open_webui.constants import ERROR_MESSAGES, TASKS
 from open_webui.models.config import Config
+from open_webui.retrieval.utils import RerankCompressor, split_sentences
 from open_webui.routers.pipelines import process_pipeline_inlet_filter
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.chat import generate_chat_completion
+from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.payload import apply_params_to_form_data
 from open_webui.utils.task import (
     autocomplete_generation_template,
@@ -480,6 +484,98 @@ async def generate_queries(request: Request, form_data: dict, user=Depends(get_v
             status_code=status.HTTP_400_BAD_REQUEST,
             content={'detail': str(e)},
         )
+
+
+# Bounds the prompt when a "chunk" is a whole document (full context mode).
+CITATION_HIGHLIGHT_MAX_SENTENCES = 200
+# How many sentences the score-based fallback highlights.
+CITATION_HIGHLIGHT_FALLBACK_COUNT = 2
+
+
+def parse_sentence_selection(response: dict, count: int) -> list[int]:
+    """0-based indices from the task model's {"sentences": [1, 3]} answer; raises if unusable."""
+    content = response['choices'][0]['message']['content']
+    selection = JSONCodec.loads(content[content.rfind('{') : content.rfind('}') + 1])['sentences']
+    if not isinstance(selection, list):
+        raise ValueError(f'Expected a list of sentence numbers, got {selection!r}')
+    return sorted({int(number) - 1 for number in selection if 1 <= int(number) <= count})
+
+
+async def rank_sentences(request: Request, claim: str, sentences: list[str], user) -> tuple[list[int], str]:
+    """Best-scoring sentences by the reranker, or by embedding similarity without one."""
+    reranking_function = request.app.state.RERANKING_FUNCTION
+    compressor = RerankCompressor(
+        embedding_function=lambda query, prefix: request.app.state.EMBEDDING_FUNCTION(query, prefix=prefix, user=user),
+        top_n=CITATION_HIGHLIGHT_FALLBACK_COUNT,
+        reranking_function=(
+            (lambda query, documents: reranking_function(query, documents, user=user)) if reranking_function else None
+        ),
+        r_score=0,
+    )
+    documents = [Document(page_content=sentence, metadata={'index': i}) for i, sentence in enumerate(sentences)]
+    ranked = await compressor.acompress_documents(documents, claim)
+    return sorted(doc.metadata['index'] for doc in ranked), 'reranker' if reranking_function else 'embedding'
+
+
+@router.post('/citation_highlights')
+async def generate_citation_highlights(request: Request, form_data: dict, user=Depends(get_verified_user)):
+    """
+    Pick the sentences of a cited chunk that support the claim citing it, so the
+    source viewer can highlight those instead of the whole chunk. Returns the
+    sentences verbatim from the chunk; falls back to reranker or embedding
+    scores when the task model gives no usable answer.
+    """
+    claim = ' '.join((form_data.get('claim') or '').split())
+    sentences = split_sentences(form_data.get('passage') or '')[:CITATION_HIGHLIGHT_MAX_SENTENCES]
+    if not claim or not sentences:
+        return {'sentences': [], 'method': None}
+
+    if getattr(request.state, 'direct', False) and hasattr(request.state, 'model'):
+        models = {
+            **dict(request.app.state.MODELS.items()),
+            request.state.model['id']: request.state.model,
+        }
+    else:
+        models = request.app.state.MODELS
+
+    model_id = form_data.get('model')
+    if model_id not in models:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.MODEL_NOT_FOUND(),
+        )
+
+    task_model_id, task_model_params = await get_task_model_generation_config(model_id, models)
+
+    numbered = '\n'.join(f'[{number}] {" ".join(sentence.split())}' for number, sentence in enumerate(sentences, 1))
+    content = DEFAULT_CITATION_HIGHLIGHT_PROMPT_TEMPLATE.replace('{{CLAIM}}', claim).replace('{{SENTENCES}}', numbered)
+
+    payload = {
+        'model': task_model_id,
+        'messages': [{'role': 'user', 'content': content}],
+        'stream': False,
+        'metadata': {
+            **(request.state.metadata if hasattr(request.state, 'metadata') else {}),
+            'task': str(TASKS.CITATION_HIGHLIGHT),
+            'task_body': form_data,
+            'chat_id': form_data.get('chat_id', None),
+        },
+    }
+
+    try:
+        payload = await process_pipeline_inlet_filter(request, payload, user, models)
+        payload = apply_task_model_params(payload, models, task_model_id, task_model_params)
+        response = await generate_chat_completion(request, form_data=payload, user=user)
+        selected, method = parse_sentence_selection(response, len(sentences)), 'model'
+    except Exception as e:
+        log.warning(f'Citation highlight selection failed, falling back to scores: {e}')
+        try:
+            selected, method = await rank_sentences(request, claim, sentences, user)
+        except Exception as e:
+            log.warning(f'Citation highlight scoring failed: {e}')
+            selected, method = [], None
+
+    return {'sentences': [sentences[i] for i in selected], 'method': method}
 
 
 @router.post('/auto/completions')

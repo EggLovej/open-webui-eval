@@ -31,6 +31,7 @@
 	import PyodideFileNav from './PyodideFileNav.svelte';
 	import Overview from './Overview.svelte';
 	import { isSavedChatId } from '$lib/utils/chatId';
+	import { createDocumentPreviewTracker } from '$lib/utils/documentSources';
 
 	const i18n = getContext('i18n');
 
@@ -105,7 +106,7 @@
 	}
 
 	// Auto-close if there are no visible tabs
-	$: if (!showControlsTab && !showFilesTab && !showOverviewTab) {
+	$: if (!showControlsTab && !showFilesTab && !showOverviewTab && !$sourceViewer) {
 		showControls.set(false);
 	}
 
@@ -202,6 +203,17 @@
 	};
 
 	$: if (mounted && !chatId) closeHandler();
+
+	const documentPreview = createDocumentPreviewTracker();
+	const previewAddedDocuments = (attachments: any[]) => {
+		const preview = documentPreview(attachments);
+		if (!preview) return;
+		showArtifacts.set(false);
+		showEmbeds.set(false);
+		sourceViewer.set(preview);
+		showControls.set(true);
+	};
+	$: if (mounted) previewAddedDocuments(files);
 
 	// The source viewer opens at half the chat area; the previous width comes back on close.
 	let sidePanel: { setWidthFraction: (fraction: number) => void } | null = null;

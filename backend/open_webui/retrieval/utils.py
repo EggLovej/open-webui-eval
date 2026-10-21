@@ -1361,6 +1361,37 @@ def filter_source_metadata(metadata: dict) -> dict:
     return {key: metadata[key] for key in RAG_SOURCE_METADATA_KEYS if metadata.get(key) is not None}
 
 
+# A sentence end (with any closing quotes or brackets), a blank line, or a line that starts a list item.
+_SENTENCE_BREAK_RE = re.compile(r'[.!?…]+["\'”’)\]]*(?=\s)|\n\s*\n|\n(?=\s*[•▪◦●*\-–]\s)')
+
+
+def split_sentences(text: str) -> list[str]:
+    """
+    Split a chunk into sentence-like segments for citation highlighting.
+
+    Deliberately simple: PDF text is full of headings, list items and wrapped
+    lines that no sentence model handles well, and a boundary in the wrong
+    place only means one more segment to select. A full stop followed by a
+    lowercase word or a digit ("e.g. the", "et al. found", "Fig. 1a") is not
+    treated as a boundary. Segments are returned verbatim, so they can be
+    located in the document.
+    """
+    segments = []
+    start = 0
+    for match in _SENTENCE_BREAK_RE.finditer(text):
+        next_char = text[match.end() :].lstrip()[:1]
+        if match.group().strip() and (next_char.islower() or next_char.isdigit()):
+            continue
+        segment = text[start : match.end()].strip()
+        if segment:
+            segments.append(segment)
+        start = match.end()
+    tail = text[start:].strip()
+    if tail:
+        segments.append(tail)
+    return segments
+
+
 async def get_sources_from_items(
     request,
     items,

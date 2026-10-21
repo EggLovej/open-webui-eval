@@ -973,6 +973,48 @@ export const generateEmoji = async (
 	return null;
 };
 
+export const getCitationHighlights = async (
+	token: string = '',
+	model: string,
+	claim: string,
+	passage: string,
+	chat_id?: string
+): Promise<{ sentences: string[]; method: string | null } | null> => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/citation_highlights`, {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			model: model,
+			claim: claim,
+			passage: passage,
+			...(chat_id && { chat_id: chat_id })
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			if ('detail' in err) {
+				error = err.detail;
+			}
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
 export const generateQueries = async (
 	token: string = '',
 	model: string,

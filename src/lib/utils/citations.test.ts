@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { getCitationKey, locatePassage, normalizeForMatch } from './citations';
+import {
+	claimAround,
+	getCitationKey,
+	locatePassage,
+	locateSentences,
+	normalizeForMatch
+} from './citations';
 
 describe('getCitationKey', () => {
 	const source = { source: { id: 'file-1', name: 'paper.pdf' } };
@@ -68,5 +74,79 @@ describe('locatePassage', () => {
 			'Completely unrelated sentence about milk yield and feeding schedules in winter barns.'
 		);
 		expect(locatePassage(page, needle)).toBeNull();
+	});
+});
+
+describe('locateSentences', () => {
+	const page = normalizeForMatch(
+		'Yes. Before the chunk. Yes. The probability of cows standing up increased linearly with lying time (Fig. 1a), as hypothesized. Yes. Lying down was unaffected. After the chunk.'
+	);
+	const chunk = locatePassage(
+		page,
+		normalizeForMatch(
+			'The probability of cows standing up increased linearly with lying time (Fig. 1a), as hypothesized. Yes. Lying down was unaffected.'
+		)
+	)!;
+	const find = (...sentences: string[]) =>
+		locateSentences(page, chunk, sentences.map(normalizeForMatch)).map((span) =>
+			page.slice(...span)
+		);
+
+	it('finds sentences that are not next to each other', () => {
+		expect(
+			find(
+				'The probability of cows standing up increased linearly with lying time (Fig. 1a), as hypothesized.',
+				'Lying down was unaffected.'
+			)
+		).toEqual([
+			normalizeForMatch(
+				'The probability of cows standing up increased linearly with lying time (Fig. 1a), as hypothesized.'
+			),
+			normalizeForMatch('Lying down was unaffected.')
+		]);
+	});
+
+	it('only searches inside the chunk', () => {
+		expect(find('Before the chunk.', 'After the chunk.')).toEqual([]);
+		const [span] = locateSentences(page, chunk, [normalizeForMatch('Yes.')]);
+		expect(span[0]).toBeGreaterThan(page.indexOf(normalizeForMatch('as hypothesized.')));
+	});
+
+	it('tolerates extraction differences within a sentence', () => {
+		expect(
+			find('The probability of cows stand-\ning up increased linearly with lying time')
+		).toHaveLength(1);
+	});
+});
+
+describe('claimAround', () => {
+	it('takes the sentence a marker ends', () => {
+		expect(claimAround('Intro here. Cows stood up more often ', '. Next sentence.')).toBe(
+			'Cows stood up more often.'
+		);
+	});
+
+	it('cites the sentence before a marker placed after the full stop', () => {
+		expect(claimAround('Intro here. Cows stood up more often. ', ' Next sentence.')).toBe(
+			'Cows stood up more often.'
+		);
+	});
+
+	it('includes the rest of the sentence after a mid-sentence marker', () => {
+		expect(claimAround('Cows stood up more ', ' after long lying bouts. Next.')).toBe(
+			'Cows stood up more after long lying bouts.'
+		);
+	});
+
+	it('does not end sentences at abbreviations or figure references', () => {
+		expect(
+			claimAround('Previously. As shown in Fig. 1a, e.g. in tie stalls, cows rest ', '.')
+		).toBe('As shown in Fig. 1a, e.g. in tie stalls, cows rest.');
+	});
+
+	it('drops the gap left by another citation', () => {
+		expect(claimAround('Cows rest more ', ' and stand less . Then more.')).toBe(
+			'Cows rest more and stand less.'
+		);
 	});
 });

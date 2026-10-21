@@ -18,6 +18,7 @@
 
 	export let id = '';
 	export let chatId = '';
+	export let model = '';
 
 	export let sources = [];
 	export let readOnly = false;
@@ -38,18 +39,22 @@
 		(metadata?.content_type === 'application/pdf' ||
 			/\.pdf$/i.test(metadata?.name ?? metadata?.source ?? ''));
 
-	// PDF chunks open next to the chat with the passage highlighted; anything else
-	// (web results, other file types, read-only views without a side panel) uses the modal.
-	const openCitation = (citation) => {
+	// File chunks open next to the chat; web results and views without a side panel use the modal.
+	// `claim` is the sentence an inline [n] backs; the citation list below has none.
+	const openCitation = (citation, claim = '') => {
 		const metadata = citation?.metadata?.[0];
-		if (!readOnly && $sourceViewerAvailable && isPdfChunk(metadata)) {
+		if (!readOnly && $sourceViewerAvailable && metadata?.file_id) {
 			showArtifacts.set(false);
 			showEmbeds.set(false);
 			sourceViewer.set({
 				fileId: metadata.file_id,
+				format: isPdfChunk(metadata) ? 'pdf' : 'text',
 				name: decodeString(citation.source?.name ?? metadata.name ?? ''),
 				page: Number.isInteger(metadata.page) ? metadata.page + 1 : null,
-				text: citation.document?.[0] ?? ''
+				text: citation.document?.[0] ?? '',
+				claim: claim || null,
+				model: model || null,
+				chatId: chatId || null
 			});
 			showControls.set(true);
 		} else {
@@ -58,7 +63,7 @@
 		}
 	};
 
-	export const showSourceModal = (sourceId) => {
+	export const showSourceModal = (sourceId, claim = '') => {
 		let index;
 		let suffix = null;
 
@@ -104,7 +109,7 @@
 					showCitationModal = true;
 				}
 			} else {
-				openCitation(citations[index]);
+				openCitation(citations[index], claim);
 			}
 		}
 	};

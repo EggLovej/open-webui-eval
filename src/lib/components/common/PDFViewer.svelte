@@ -8,7 +8,7 @@
 	import { mapWordComments, type PdfTextRun } from '$lib/utils/comments/pdfAnchors';
 	import { findTextRange, highlightRange, commentPin } from '$lib/utils/comments/highlights';
 	import type { FileComment, CommentResult } from '$lib/utils/comments/types';
-	import { findPassageRange } from '$lib/utils/citations';
+	import { findPassageRanges } from '$lib/utils/citations';
 
 	const i18n: any = getContext('i18n');
 
@@ -27,6 +27,8 @@
 	export let onAnchors: ((ids: string[]) => void) | null = null;
 	// Passage to highlight and scroll to (e.g. a cited chunk); searched on targetPage first.
 	export let highlightText: string | null = null;
+	// Sentences within highlightText to emphasise (e.g. the ones backing a claim); the rest stays faint.
+	export let highlightSentences: string[] = [];
 	export let onHighlight: ((found: boolean) => void) | null = null;
 	let mappedSource: FileComment[] | null = null;
 	let mappedDoc: PdfDocument | null = null;
@@ -230,11 +232,12 @@
 					`.pdf-page-wrapper[data-page-number="${targetPage}"]`
 				)
 			: null;
-		const range =
-			(pageWrapper && findPassageRange(pageWrapper, highlightText)) ||
-			findPassageRange(sceneElement, highlightText);
-		const wrapper = range?.startContainer.parentElement?.closest<HTMLElement>('.pdf-page-wrapper');
-		if (!range || !wrapper) {
+		const ranges =
+			(pageWrapper && findPassageRanges(pageWrapper, highlightText, highlightSentences)) ||
+			findPassageRanges(sceneElement, highlightText, highlightSentences);
+		const wrapper =
+			ranges?.passage.startContainer.parentElement?.closest<HTMLElement>('.pdf-page-wrapper');
+		if (!ranges || !wrapper) {
 			onHighlight?.(false);
 			return;
 		}
@@ -250,22 +253,28 @@
 		// Rects come back in screen pixels; undo any panzoom scale applied to the scene
 		const bounds = wrapper.getBoundingClientRect();
 		const scale = bounds.width / wrapper.offsetWidth || 1;
-		for (const rect of Array.from(range.getClientRects())) {
-			if (rect.width <= 0 || rect.height <= 0) continue;
-			const mark = document.createElement('div');
-			mark.dataset.passageHighlight = '';
-			Object.assign(mark.style, {
-				position: 'absolute',
-				left: `${(rect.left - bounds.left) / scale}px`,
-				top: `${(rect.top - bounds.top) / scale}px`,
-				width: `${rect.width / scale}px`,
-				height: `${rect.height / scale}px`,
-				borderRadius: '2px',
-				background: 'rgba(250,204,21,.18)',
-				mixBlendMode: 'multiply'
-			});
-			layer.appendChild(mark);
-		}
+		const markRange = (range: Range, kind: 'passage' | 'sentence', background: string) => {
+			for (const rect of Array.from(range.getClientRects())) {
+				if (rect.width <= 0 || rect.height <= 0) continue;
+				const mark = document.createElement('div');
+				mark.setAttribute(`data-${kind}-highlight`, '');
+				Object.assign(mark.style, {
+					position: 'absolute',
+					left: `${(rect.left - bounds.left) / scale}px`,
+					top: `${(rect.top - bounds.top) / scale}px`,
+					width: `${rect.width / scale}px`,
+					height: `${rect.height / scale}px`,
+					borderRadius: '2px',
+					background,
+					mixBlendMode: 'multiply'
+				});
+				layer.appendChild(mark);
+			}
+		};
+		// With cited sentences found, the rest of the chunk stays faintly tinted for context
+		const emphasised = ranges.sentences.length > 0;
+		markRange(ranges.passage, 'passage', `rgba(250,204,21,${emphasised ? '.07' : '.18'})`);
+		for (const range of ranges.sentences) markRange(range, 'sentence', 'rgba(250,204,21,.3)');
 		wrapper.appendChild(layer);
 		onHighlight?.(layer.childElementCount > 0);
 	};
@@ -412,7 +421,9 @@
 		const pageWrapper = sceneElement.querySelectorAll('.pdf-page-wrapper')[page - 1] as
 			| HTMLElement
 			| undefined;
-		const passage = sceneElement.querySelector<HTMLElement>('[data-passage-highlight]');
+		const passage =
+			sceneElement.querySelector<HTMLElement>('[data-sentence-highlight]') ??
+			sceneElement.querySelector<HTMLElement>('[data-passage-highlight]');
 		if (passage) {
 			passage.scrollIntoView({ block: 'center' });
 		} else {
@@ -738,14 +749,15 @@
 		void renderAllPages();
 	}
 
-	const showPassage = (text: string | null) => {
+	// Takes the sentences only so Svelte re-runs this when they arrive after the passage
+	const showPassage = (text: string | null, _sentences: string[]) => {
 		// Leave viewers that never highlight untouched
 		if (!text && !sceneElement?.querySelector('.passage-highlight-layer')) return;
 		renderPassageHighlight();
 		void scrollToTargetPage();
 	};
 
-	$: if (!loading && pdfDoc) showPassage(highlightText);
+	$: if (!loading && pdfDoc) showPassage(highlightText, highlightSentences);
 
 	$: if (!loading && pdfDoc && !singlePage && targetPage) {
 		void scrollToTargetPage();
