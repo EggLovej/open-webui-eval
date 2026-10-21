@@ -42,6 +42,9 @@ class PDFLoader(BaseLoader):
             texts = []
             for index, page in enumerate(reader.pages):
                 text = page.extract_text()
+                form_text = self._extract_form_fields(page)
+                if form_text:
+                    text = f'{text.rstrip()}\n\n{form_text}'
                 if self.extract_images:
                     image_text = self._extract_images(page)
                     if image_text:
@@ -53,6 +56,56 @@ class PDFLoader(BaseLoader):
                     texts.append(text)
             if self.mode == 'single':
                 yield Document(page_content='\n\f'.join(texts), metadata=metadata)
+
+    @staticmethod
+    def _extract_form_fields(page):
+        """Filled-in form values as 'name: value' lines; extract_text() skips them.
+
+        Read from the page's widget annotations rather than the document /AcroForm,
+        which some exporters omit (e.g. D&D Beyond character sheets).
+        """
+        from pypdf.generic import NameObject
+
+        annots = page.get('/Annots')
+        fields = []
+        for annot in annots.get_object() if annots is not None else []:
+            try:
+                widget = annot.get_object()
+                if widget.get('/Subtype') != '/Widget':
+                    continue
+                # Fields with several widgets keep their name and value on the parent
+                parent = widget.get('/Parent')
+                parent = parent.get_object() if parent is not None else {}
+                name = widget.get('/T') or parent.get('/T')
+                value = widget.get('/V')
+                if value is None:
+                    value = parent.get('/V')
+                if value is None:
+                    continue
+
+                if isinstance(value, NameObject):
+                    # Checkbox/radio: a radio group keeps its choice on the shared parent,
+                    # so whether this widget is the selected one comes from its own /AS
+                    state = widget.get('/AS', value)
+                    value = '' if state == '/Off' else 'checked'
+                elif isinstance(value, bytes):
+                    value = value.decode('latin-1').strip()
+                elif isinstance(value, list):
+                    value = ', '.join(str(v).strip() for v in value if str(v).strip())
+                else:
+                    value = str(value).strip()
+                if not name or not value:
+                    continue
+
+                rect = [float(v) for v in widget.get('/Rect', [0, 0, 0, 0])]
+                top, left = max(rect[1], rect[3]), min(rect[0], rect[2])
+                fields.append((top, left, ' '.join(str(name).split()), value))
+            except Exception as e:
+                log.debug('Skipping unreadable PDF form field: %s', e)
+
+        # Reading order: top to bottom, left to right, treating fields within 5pt as one row
+        fields.sort(key=lambda field: (-round(field[0] / 5), field[1]))
+        return '\n'.join(f'{name}: {value}' for _, _, name, value in fields)
 
     @staticmethod
     def _merge_image_text(text, image_text):
