@@ -8,6 +8,12 @@
 	import { mapWordComments, type PdfTextRun } from '$lib/utils/comments/pdfAnchors';
 	import { findTextRange, highlightRange, commentPin } from '$lib/utils/comments/highlights';
 	import type { FileComment, CommentResult } from '$lib/utils/comments/types';
+	import {
+		formFieldsFromAnnotations,
+		locateOnPage,
+		mergeLineBoxes,
+		type PdfFormField
+	} from '$lib/utils/citations';
 
 	const i18n: any = getContext('i18n');
 
@@ -24,6 +30,9 @@
 	export let selectedComment: FileComment | null = null;
 	export let sourceComments: FileComment[] | null = null;
 	export let onAnchors: ((ids: string[]) => void) | null = null;
+	// Passage to highlight and scroll to (e.g. a cited chunk); searched on targetPage first.
+	export let highlightText: string | null = null;
+	export let onHighlight: ((found: boolean) => void) | null = null;
 	let mappedSource: FileComment[] | null = null;
 	let mappedDoc: PdfDocument | null = null;
 	let textRuns: Promise<PdfTextRun[]> | null = null;
@@ -215,6 +224,112 @@
 		}
 	};
 
+	// Per rendered page: filled-in form fields (not part of the text layer) and the CSS
+	// viewport that maps their PDF rects onto the page. Only collected when highlighting.
+	let pageFormFields = new Map<number, PdfFormField[]>();
+	let pageViewports = new Map<number, import('pdfjs-dist').PageViewport>();
+
+	const locatePassageOnPage = (wrapper: HTMLElement, text: string) => ({
+		wrapper,
+		...locateOnPage(wrapper, text, pageFormFields.get(Number(wrapper.dataset.pageNumber)) ?? [])
+	});
+
+	const drawPassageHighlight = ({
+		wrapper,
+		ranges,
+		fields
+	}: ReturnType<typeof locatePassageOnPage>) => {
+		const viewport = pageViewports.get(Number(wrapper.dataset.pageNumber));
+
+		// Text-layer rects come back in screen pixels; undo any panzoom scale on the scene
+		const bounds = wrapper.getBoundingClientRect();
+		const scale = bounds.width / wrapper.offsetWidth || 1;
+		// One rect per text-layer span; merged per line so word gaps are covered too
+		const boxes = mergeLineBoxes(
+			ranges.flatMap((range) =>
+				Array.from(range.getClientRects())
+					.filter((rect) => rect.width > 0 && rect.height > 0)
+					.map((rect) => ({
+						left: (rect.left - bounds.left) / scale,
+						top: (rect.top - bounds.top) / scale,
+						width: rect.width / scale,
+						height: rect.height / scale
+					}))
+			)
+		);
+		if (viewport) {
+			for (const field of fields) {
+				const [x1, y1, x2, y2] = viewport.convertToViewportRectangle(field.rect);
+				boxes.push({
+					left: Math.min(x1, x2),
+					top: Math.min(y1, y2),
+					width: Math.abs(x2 - x1),
+					height: Math.abs(y2 - y1)
+				});
+			}
+		}
+		if (boxes.length === 0) return;
+
+		const layer = document.createElement('div');
+		layer.className = 'passage-highlight-layer';
+		Object.assign(layer.style, {
+			position: 'absolute',
+			inset: '0',
+			pointerEvents: 'none',
+			zIndex: '3',
+			// Blend the whole layer: z-index makes it a stacking context, so a blend mode on
+			// the marks inside would only see the empty layer, not the page. Multiplying
+			// with the page keeps the text dark under an opaque color.
+			mixBlendMode: 'multiply'
+		});
+		for (const box of boxes) {
+			const mark = document.createElement('div');
+			mark.dataset.passageHighlight = '';
+			Object.assign(mark.style, {
+				position: 'absolute',
+				left: `${box.left}px`,
+				top: `${box.top}px`,
+				width: `${box.width}px`,
+				height: `${box.height}px`,
+				borderRadius: '2px',
+				background: '#90ee90'
+			});
+			layer.appendChild(mark);
+		}
+		wrapper.appendChild(layer);
+	};
+
+	// Synchronous so a scroll queued in the same update already sees the new highlight.
+	const renderPassageHighlight = () => {
+		if (!sceneElement) return;
+		sceneElement.querySelectorAll('.passage-highlight-layer').forEach((layer) => layer.remove());
+		if (!highlightText) return;
+
+		const text = highlightText;
+		const wrappers = Array.from(sceneElement.querySelectorAll<HTMLElement>('.pdf-page-wrapper'));
+		const target = wrappers.find((wrapper) => Number(wrapper.dataset.pageNumber) === targetPage);
+		const targetMatch = target ? locatePassageOnPage(target, text) : null;
+
+		let matches = targetMatch && targetMatch.score > 0 ? [targetMatch] : [];
+		if (matches.length === 0) {
+			// No page given (e.g. a tool result) or nothing found on it: search every page.
+			// Captions repeated on every page would match line-by-line anywhere, so apart
+			// from the best page only pages with form fields or a whole passage count.
+			const found = wrappers
+				.map((wrapper) => locatePassageOnPage(wrapper, text))
+				.filter((match) => match.score > 0);
+			const best = found.reduce<(typeof found)[number] | null>(
+				(top, match) => (!top || match.score > top.score ? match : top),
+				null
+			);
+			matches = found.filter(
+				(match) => match === best || match.fields.length > 0 || match.contiguous
+			);
+		}
+		matches.forEach(drawPassageHighlight);
+		onHighlight?.(matches.length > 0);
+	};
+
 	type PdfDocument = import('pdfjs-dist').PDFDocumentProxy;
 	type PdfTextLayer = InstanceType<typeof import('pdfjs-dist').TextLayer>;
 
@@ -357,7 +472,12 @@
 		const pageWrapper = sceneElement.querySelectorAll('.pdf-page-wrapper')[page - 1] as
 			| HTMLElement
 			| undefined;
-		pageWrapper?.scrollIntoView({ block: 'start' });
+		const passage = sceneElement.querySelector<HTMLElement>('[data-passage-highlight]');
+		if (passage) {
+			passage.scrollIntoView({ block: 'center' });
+		} else {
+			pageWrapper?.scrollIntoView({ block: 'start' });
+		}
 		activePage = page;
 		onPageChange?.(page);
 	};
@@ -526,11 +646,20 @@
 			if (token !== renderToken) return;
 			textLayerInstances.push(textLayer);
 
+			if (highlightText !== null) {
+				pageViewports.set(i, cssViewport);
+				if (!pageFormFields.has(i)) {
+					pageFormFields.set(i, formFieldsFromAnnotations(await page.getAnnotations()));
+					if (token !== renderToken) return;
+				}
+			}
+
 			wrappers.push(wrapper);
 		}
 
 		sceneElement.replaceChildren(...wrappers);
 		void renderCommentMarkers();
+		renderPassageHighlight();
 		lastRenderedZoom = 1;
 		renderedPage = singlePage ? selectedPage : 0;
 		initPanzoom();
@@ -609,6 +738,8 @@
 		mappedDoc = null;
 		mappedSource = null;
 		comments = [];
+		pageFormFields = new Map();
+		pageViewports = new Map();
 
 		try {
 			const pdfjs = await import('pdfjs-dist');
@@ -676,6 +807,15 @@
 	$: if (!loading && pdfDoc && singlePage && targetPage && selectedPage !== renderedPage) {
 		void renderAllPages();
 	}
+
+	const showPassage = (text: string | null) => {
+		// Leave viewers that never highlight untouched
+		if (!text && !sceneElement?.querySelector('.passage-highlight-layer')) return;
+		renderPassageHighlight();
+		void scrollToTargetPage();
+	};
+
+	$: if (!loading && pdfDoc) showPassage(highlightText);
 
 	$: if (!loading && pdfDoc && !singlePage && targetPage) {
 		void scrollToTargetPage();

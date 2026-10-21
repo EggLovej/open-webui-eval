@@ -49,14 +49,14 @@
 			<LinkPreview.Trigger>
 				<button
 					aria-label={`${getDisplayTitle(formattedTitle(decodeString(sourceIds[token.ids[0] - 1])))} +${(token?.ids ?? []).length - 1} more sources`}
-					class="text-[0.625rem] w-fit translate-y-[2px] px-2 py-0.5 dark:bg-white/5 dark:text-white/80 dark:hover:text-white bg-gray-50 text-black/80 hover:text-black transition rounded-xl"
+					class="text-[0.625rem] w-fit translate-y-[2px] px-2 py-0.5 bg-[#016eb1] text-white hover:bg-[#015a91] transition rounded-md"
 					on:click={() => {
 						openPreview = !openPreview;
 					}}
 				>
 					<span class="line-clamp-1">
 						{getDisplayTitle(formattedTitle(decodeString(sourceIds[token.ids[0] - 1])))}
-						<span class="dark:text-white/50 text-black/50">+{(token?.ids ?? []).length - 1}</span>
+						<span class="text-white/70">+{(token?.ids ?? []).length - 1}</span>
 					</span>
 				</button>
 			</LinkPreview.Trigger>

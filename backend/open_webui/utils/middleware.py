@@ -609,9 +609,26 @@ def get_response_completion_event_data(event: dict) -> dict:
     }
 
 
+SEGMENT_BLANK_CHARS = ' \t\r\f\v'
+
+
+def label_segments(source_number: int, text: str) -> str:
+    """
+    Prefix each non-blank line of a chunk with a citable segment label, e.g. [2#3],
+    so the model can cite the line that supports a claim instead of the whole chunk.
+    The frontend numbers segments the same way (getSegments in src/lib/utils/citations.ts).
+    """
+    segments = [line for line in text.split('\n') if line.strip(SEGMENT_BLANK_CHARS)]
+    return '\n'.join(f'[{source_number}#{index}] {line}' for index, line in enumerate(segments, 1))
+
+
 def get_source_context(sources: list, source_ids: dict = None, include_content: bool = True) -> str:
     """
     Build <source> tag context string from citation sources.
+
+    Each distinct chunk gets its own id, so an inline [id] citation points at
+    one passage instead of a whole document. The frontend numbers chunks the
+    same way (getCitationKey in src/lib/utils/citations.ts).
     """
     context_string = ''
     if source_ids is None:
@@ -619,19 +636,20 @@ def get_source_context(sources: list, source_ids: dict = None, include_content: 
     for source in sources:
         for doc, meta in zip(source.get('document', []), source.get('metadata', [])):
             source_id = meta.get('source') or source.get('source', {}).get('id') or 'N/A'
-            if source_id not in source_ids:
-                source_ids[source_id] = len(source_ids) + 1
+            citation_key = (source_id, doc)
+            if citation_key not in source_ids:
+                source_ids[citation_key] = len(source_ids) + 1
             src_name = source.get('source', {}).get('name')
             src_type = source.get('source', {}).get('type')
             src_rid = source.get('source', {}).get('id') if src_type != 'text' else None
-            body = doc if include_content else ''
+            body = label_segments(source_ids[citation_key], doc) if include_content else ''
             extra_attrs = ''
             for key, value in filter_source_metadata(meta).items():
                 if key in ('id', 'name', 'resource-type', 'resource-id'):
                     continue
                 extra_attrs += f' {key}="{html.escape(str(value))}"'
             context_string += (
-                f'<source id="{source_ids[source_id]}"'
+                f'<source id="{source_ids[citation_key]}"'
                 + (f' name="{src_name}"' if src_name else '')
                 + (f' resource-type="{src_type}"' if src_type else '')
                 + (f' resource-id="{src_rid}"' if src_rid else '')

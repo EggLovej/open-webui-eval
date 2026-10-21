@@ -15,6 +15,7 @@
 	} from '$lib/stores';
 	import FloatingButtons from '../ContentRenderer/FloatingButtons.svelte';
 	import { createMessagesList, replaceOutsideCode } from '$lib/utils';
+	import { getCitationKey } from '$lib/utils/citations';
 
 	/**
 	 * Extracts all top-level <details>...</details> blocks from content,
@@ -115,10 +116,11 @@
 				}
 				const metadata = source.metadata?.[index];
 				const id = metadata?.source ?? source?.source?.id ?? 'N/A';
-				if (seenIds.has(id)) {
+				const key = getCitationKey(source, metadata, source.document[index]);
+				if (seenIds.has(key)) {
 					continue;
 				}
-				seenIds.add(id);
+				seenIds.add(key);
 				if (metadata?.name) {
 					result.push(metadata.name);
 				} else if (id.startsWith('http://') || id.startsWith('https://')) {
