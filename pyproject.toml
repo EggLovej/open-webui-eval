@@ -188,6 +188,7 @@ exclude = [
     ".webui_secret_key",
     "dev.sh",
     "requirements.txt",
+    "constraints.txt",
     "start.sh",
     "start_windows.bat",
     "webui.db",
@@ -207,6 +208,12 @@ dev = [
     "pytest-asyncio>=1.0.0",
     "ruff>=0.15.5",
 ]
+
+[tool.uv]
+exclude-newer = "7 days"
+# eMudhra / emSign emergency updates bypass the cooldown; review after 2026-10-27
+exclude-newer-package = { certifi = false, pip = false }
+constraint-dependencies = ["certifi>=2026.10.19"]
 
 [tool.black]
 line-length = 120

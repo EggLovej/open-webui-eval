@@ -1,0 +1,4 @@
+# Security floors applied to every `uv pip install` in the Dockerfile.
+# eMudhra / emSign CA incident: older releases trust compromised certificates; review after 2026-10-27
+certifi>=2026.10.19
+pip>=26.2.2

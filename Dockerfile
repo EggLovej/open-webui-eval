@@ -154,27 +154,32 @@ RUN apt-get update && \
     fi && rm -rf /var/lib/apt/lists/*
 
 # install python dependencies
-COPY --chown=$UID:$GID ./backend/requirements*.txt ./
+COPY --chown=$UID:$GID ./backend/requirements*.txt ./backend/constraints.txt ./
 
 # Set UV_LINK_MODE to copy to prevent 0-byte file corruption in QEMU arm64 cross-builds
 ENV UV_LINK_MODE=copy
 
-RUN --mount=from=ghcr.io/astral-sh/uv:0.12.10,source=/uv,target=/bin/uv \
+RUN --mount=from=ghcr.io/astral-sh/uv:0.13.4,source=/uv,target=/bin/uv \
     set -e; \
+    # 7-day supply-chain cooldown (mirrors [tool.uv] in pyproject.toml).
+    # eMudhra / emSign emergency updates bypass the cooldown; review after 2026-10-27
+    UV_PIP_ARGS="--exclude-newer P7D --exclude-newer-package certifi=false --exclude-newer-package pip=false --constraint constraints.txt"; \
+    # The base image's pip vendors its own certifi, so upgrade it before pip3 is used below
+    uv pip install --system $UV_PIP_ARGS --no-cache-dir --upgrade pip; \
     if [ "$USE_SLIM" = "true" ]; then \
-    uv pip install --system -r requirements-slim.txt --no-cache-dir; \
+    uv pip install --system $UV_PIP_ARGS -r requirements-slim.txt --no-cache-dir; \
     elif [ "$USE_CUDA" = "true" ]; then \
     # If you use CUDA the whisper and embedding model will be downloaded on first use
     # fix: pin torch<=2.9.1 - torch 2.10.0 aarch64 wheels cause SIGILL on ARM devices (RPi 4 Cortex-A72) #21349
     pip3 install 'torch<=2.9.1' torchvision torchaudio --index-url https://download.pytorch.org/whl/$USE_CUDA_DOCKER_VER --no-cache-dir; \
-    uv pip install --system -r requirements.txt --no-cache-dir; \
+    uv pip install --system $UV_PIP_ARGS -r requirements.txt --no-cache-dir; \
     python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')"; \
     python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ.get('AUXILIARY_EMBEDDING_MODEL', 'TaylorAI/bge-micro-v2'), device='cpu')"; \
     python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])"; \
     python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])"; \
     else \
     pip3 install 'torch<=2.9.1' torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir; \
-    uv pip install --system -r requirements.txt --no-cache-dir; \
+    uv pip install --system $UV_PIP_ARGS -r requirements.txt --no-cache-dir; \
     if [ "$USE_SLIM" != "true" ]; then \
     python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')"; \
     python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ.get('AUXILIARY_EMBEDDING_MODEL', 'TaylorAI/bge-micro-v2'), device='cpu')"; \
