@@ -1,0 +1,75 @@
+# Builds the image the eval droplet runs (linux/amd64 only).
+# Push to main            -> ghcr.io/<owner>/<repo>:latest, :main, :sha-<short>
+# Run manually on a branch -> :<branch>, :sha-<short> (+ :latest if "latest" is ticked)
+name: Eval image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      latest:
+        description: Also tag this build as :latest (what the server pulls)
+        type: boolean
+        default: false
+
+concurrency:
+  group: eval-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      # Same tweak as upstream docker.yaml: give the frontend build enough heap on CI runners.
+      - name: Prepare CI Dockerfile
+        run: |
+          awk '
+            /^FROM --platform=\$BUILDPLATFORM node:/ {
+              print
+              print "ENV NODE_OPTIONS=\"--max-old-space-size=12288\""
+              next
+            }
+            { print }
+          ' Dockerfile > "${RUNNER_TEMP}/Dockerfile"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || inputs.latest == true }}
+          flavor: latest=false
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ runner.temp }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+          build-args: |
+            BUILD_HASH=${{ github.sha }}
+            BUILD_CHANNEL=main
