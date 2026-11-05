@@ -1,9 +1,15 @@
-// Each distinct chunk gets its own citation number, so an inline [n] points at one
-// passage instead of a whole document. Must stay in sync with get_source_context
-// in backend/open_webui/utils/middleware.py, which assigns the numbers the model sees.
-export const getCitationKey = (source: any, metadata: any, document: string): string => {
+// With enriched references each distinct chunk gets its own citation number, so an inline
+// [n] points at one passage instead of a whole document; without, a document's chunks share
+// one number (upstream behaviour). Must stay in sync with get_source_context in
+// backend/open_webui/utils/middleware.py, which assigns the numbers the model sees.
+export const getCitationKey = (
+	source: any,
+	metadata: any,
+	document: string,
+	enriched = true
+): string => {
 	const id = metadata?.source ?? source?.source?.id ?? 'N/A';
-	return `${id}\u0000${document ?? ''}`;
+	return enriched ? `${id}\u0000${document ?? ''}` : id;
 };
 
 // The backend (PyPDF) and the browser (pdf.js) extract PDF text differently: line breaks,

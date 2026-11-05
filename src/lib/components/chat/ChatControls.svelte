@@ -32,6 +32,7 @@
 	import Overview from './Overview.svelte';
 	import { isSavedChatId } from '$lib/utils/chatId';
 	import { createDocumentPreviewTracker } from '$lib/utils/documentSources';
+	import { resolveFeatures } from '$lib/utils/features';
 
 	const i18n = getContext('i18n');
 
@@ -207,7 +208,7 @@
 	const documentPreview = createDocumentPreviewTracker();
 	const previewAddedDocuments = (attachments: any[]) => {
 		const preview = documentPreview(attachments);
-		if (!preview) return;
+		if (!preview || !resolveFeatures($settings?.features).enrichedReferences) return;
 		showArtifacts.set(false);
 		showEmbeds.set(false);
 		sourceViewer.set(preview);

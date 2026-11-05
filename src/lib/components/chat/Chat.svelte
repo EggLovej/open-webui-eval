@@ -75,6 +75,7 @@
 	import { acquireWakeLock } from '$lib/utils/wakeLock';
 	import { routeAvatarAnimation } from '$lib/utils/voice-avatar';
 	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
+	import { resolveFeatures, toRequestFeatures } from '$lib/utils/features';
 	import {
 		applyResponseStreamEvent,
 		getOutputText,
@@ -3981,6 +3982,8 @@
 					model: model.id,
 					modelName: model.name ?? model.id,
 					modelIdx: modelIdx ? modelIdx : _modelIdx,
+					// The switches this reply is generated with; it renders by them, not by the current setting
+					features: resolveFeatures($settings?.features),
 					timestamp: Math.floor(Date.now() / 1000) // Unix epoch
 				};
 
@@ -4104,7 +4107,7 @@
 		};
 	};
 
-	const getFeatures = () => {
+	const getFeatures = (responseMessage = null) => {
 		let features = {};
 
 		if ($config?.features)
@@ -4127,7 +4130,11 @@
 			features = { ...features, memory: true };
 		}
 
-		return features;
+		// A reply keeps the switches it was started with, so continuing it matches its sources
+		return {
+			...features,
+			...toRequestFeatures(resolveFeatures(responseMessage?.features ?? $settings?.features))
+		};
 	};
 
 	const getStopTokens = () => {
@@ -4342,7 +4349,7 @@
 								: [])
 						]
 					: [],
-				features: getFeatures(),
+				features: getFeatures(responseMessage),
 				variables: {
 					...getPromptVariables(
 						$user?.name,

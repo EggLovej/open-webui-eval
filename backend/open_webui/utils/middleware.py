@@ -90,6 +90,7 @@ from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.chat_id import is_saved_chat_id
 from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.context_compaction import compact_messages_for_request
+from open_webui.utils.features import feature_enabled
 from open_webui.utils.files import (
     convert_markdown_base64_images,
     get_file_url_from_base64,
@@ -622,13 +623,20 @@ def label_segments(source_number: int, text: str) -> str:
     return '\n'.join(f'[{source_number}#{index}] {line}' for index, line in enumerate(segments, 1))
 
 
-def get_source_context(sources: list, source_ids: dict = None, include_content: bool = True) -> str:
+def get_source_context(
+    sources: list,
+    source_ids: dict = None,
+    include_content: bool = True,
+    enriched_references: bool = True,
+) -> str:
     """
     Build <source> tag context string from citation sources.
 
-    Each distinct chunk gets its own id, so an inline [id] citation points at
-    one passage instead of a whole document. The frontend numbers chunks the
-    same way (getCitationKey in src/lib/utils/citations.ts).
+    With enriched references, each distinct chunk gets its own id and its lines
+    are labelled as segments, so an inline citation points at one passage instead
+    of a whole document. Without, chunks of one document share an id (upstream
+    behaviour). The frontend numbers sources the same way (getCitationKey in
+    src/lib/utils/citations.ts).
     """
     context_string = ''
     if source_ids is None:
@@ -636,13 +644,18 @@ def get_source_context(sources: list, source_ids: dict = None, include_content: 
     for source in sources:
         for doc, meta in zip(source.get('document', []), source.get('metadata', [])):
             source_id = meta.get('source') or source.get('source', {}).get('id') or 'N/A'
-            citation_key = (source_id, doc)
+            citation_key = (source_id, doc) if enriched_references else source_id
             if citation_key not in source_ids:
                 source_ids[citation_key] = len(source_ids) + 1
             src_name = source.get('source', {}).get('name')
             src_type = source.get('source', {}).get('type')
             src_rid = source.get('source', {}).get('id') if src_type != 'text' else None
-            body = label_segments(source_ids[citation_key], doc) if include_content else ''
+            if not include_content:
+                body = ''
+            elif enriched_references:
+                body = label_segments(source_ids[citation_key], doc)
+            else:
+                body = doc
             extra_attrs = ''
             for key, value in filter_source_metadata(meta).items():
                 if key in ('id', 'name', 'resource-type', 'resource-id'):
@@ -665,6 +678,7 @@ async def apply_source_context_to_messages(
     sources: list,
     user_message: str,
     include_content: bool = True,
+    enriched_references: bool = True,
 ) -> list:
     """
     Build source context from citation sources and apply to messages.
@@ -677,7 +691,7 @@ async def apply_source_context_to_messages(
     if not sources or not user_message:
         return messages
 
-    context = get_source_context(sources, include_content=include_content)
+    context = get_source_context(sources, include_content=include_content, enriched_references=enriched_references)
 
     context = context.strip()
     if not context:
@@ -685,13 +699,13 @@ async def apply_source_context_to_messages(
 
     if RAG_SYSTEM_CONTEXT:
         return add_or_update_system_message(
-            await rag_template(await Config.get('rag.template'), context, user_message),
+            await rag_template(await Config.get('rag.template'), context, user_message, enriched_references),
             messages,
             append=True,
         )
     else:
         return add_or_update_user_message(
-            await rag_template(await Config.get('rag.template'), context, user_message),
+            await rag_template(await Config.get('rag.template'), context, user_message, enriched_references),
             messages,
             append=False,
         )
@@ -2978,7 +2992,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     # If context is not empty, insert it into the messages
     if sources and prompt:
-        form_data['messages'] = await apply_source_context_to_messages(request, form_data['messages'], sources, prompt)
+        form_data['messages'] = await apply_source_context_to_messages(
+            request,
+            form_data['messages'],
+            sources,
+            prompt,
+            enriched_references=feature_enabled(features, 'enriched_references'),
+        )
 
     # If there are citations, add them to the data_items
     sources = [
@@ -5879,13 +5899,17 @@ async def streaming_chat_response_handler(response, ctx):
 
                             # Build context: file sources with content,
                             # tool sources as citation markers only.
+                            enriched_references = feature_enabled(metadata.get('features'), 'enriched_references')
                             source_ids = {}
                             source_context = get_source_context(
-                                metadata.get('sources', []), source_ids
+                                metadata.get('sources', []),
+                                source_ids,
+                                enriched_references=enriched_references,
                             ) + get_source_context(
                                 all_tool_call_sources,
                                 source_ids,
                                 include_content=False,
+                                enriched_references=enriched_references,
                             )
                             source_context = source_context.strip()
                             if source_context:
@@ -5893,6 +5917,7 @@ async def streaming_chat_response_handler(response, ctx):
                                     await Config.get('rag.template'),
                                     source_context,
                                     user_message,
+                                    enriched_references,
                                 )
                                 if RAG_SYSTEM_CONTEXT:
                                     form_data['messages'] = add_or_update_system_message(

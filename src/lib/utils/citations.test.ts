@@ -38,6 +38,13 @@ describe('getCitationKey', () => {
 		);
 	});
 
+	it('gives all chunks of a file one key when enriched references are off', () => {
+		const meta = { source: 'paper.pdf' };
+		expect(getCitationKey(source, meta, 'chunk A', false)).toBe(
+			getCitationKey(source, meta, 'chunk B', false)
+		);
+	});
+
 	it('falls back to the source id when chunk metadata has no source', () => {
 		expect(getCitationKey(source, undefined, 'x')).toBe(getCitationKey(source, {}, 'x'));
 	});

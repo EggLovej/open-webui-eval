@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from open_webui.config import DEFAULT_RAG_TEMPLATE
+from open_webui.config import DEFAULT_RAG_TEMPLATE, ENRICHED_RAG_TEMPLATE
 from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.misc import get_content_from_message, get_last_user_message, get_messages_content
 
@@ -263,9 +263,10 @@ def replace_messages_variable(
 
 # Let the context given here not distort the question,
 # but illuminate it, so that the answer serves the one who asked.
-async def rag_template(template: str, context: str, query: str):
-    if template.strip() == '':
-        template = DEFAULT_RAG_TEMPLATE
+async def rag_template(template: str, context: str, query: str, enriched_references: bool = True):
+    # A built-in template (or none) follows the references mode; a custom one is used as is
+    if template.strip() in ('', DEFAULT_RAG_TEMPLATE.strip(), ENRICHED_RAG_TEMPLATE.strip()):
+        template = ENRICHED_RAG_TEMPLATE if enriched_references else DEFAULT_RAG_TEMPLATE
 
     template = await prompt_template(template)
 
