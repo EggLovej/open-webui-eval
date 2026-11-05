@@ -19,6 +19,8 @@
 	export let id = '';
 	export let chatId = '';
 	export let model = '';
+	// Off: upstream behaviour, one citation per document, opened in the modal
+	export let enrichedReferences = true;
 
 	export let sources = [];
 	export let readOnly = false;
@@ -43,7 +45,7 @@
 	// `claim` is the sentence an inline [n] backs; the citation list below has none.
 	const openCitation = (citation, claim = '', segment: string | null = null) => {
 		const metadata = citation?.metadata?.[0];
-		if (!readOnly && $sourceViewerAvailable && metadata?.file_id) {
+		if (enrichedReferences && !readOnly && $sourceViewerAvailable && metadata?.file_id) {
 			const chunk = citation.document?.[0] ?? '';
 			const selected = resolveSegments(chunk, segment);
 			showArtifacts.set(false);
@@ -156,8 +158,8 @@
 				const distance = source?.distances?.[index];
 
 				const id = metadata?.source ?? source?.source?.id ?? 'N/A';
-				// One citation per chunk; only a repeated chunk merges into an existing one
-				const key = getCitationKey(source, metadata, document);
+				// Enriched: one citation per chunk. Otherwise one per document, as upstream.
+				const key = getCitationKey(source, metadata, document, enrichedReferences);
 				let _source = source?.source;
 
 				if (metadata?.name) {
@@ -179,6 +181,12 @@
 						metadata: metadata ? [metadata] : [],
 						distances: distance !== undefined ? [distance] : []
 					});
+				} else if (!enrichedReferences) {
+					// A document's further chunks join its citation. With enriched references the
+					// key includes the chunk text, so a repeat is the same passage, listed once.
+					existingSource.document.push(document);
+					existingSource.metadata.push(metadata);
+					if (distance !== undefined) existingSource.distances.push(distance);
 				}
 			});
 

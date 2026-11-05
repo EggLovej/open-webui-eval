@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
+	import { readable, type Readable } from 'svelte/store';
 	import { decodeString } from '$lib/utils';
 
 	const i18n = getContext('i18n');
+	// Set by ContentRenderer; blue chips belong to enriched references
+	const enrichedReferences: Readable<boolean> = getContext('enrichedReferences') ?? readable(true);
 
 	export let id;
 
@@ -41,7 +44,9 @@
 {#if title !== 'N/A'}
 	<button
 		aria-label={$i18n.t('View source: {{title}}', { title: formattedTitle(decodeString(title)) })}
-		class="text-[0.625rem] w-fit translate-y-[2px] px-2 py-0.5 bg-[#016eb1] text-white hover:bg-[#015a91] transition rounded-md"
+		class="text-[0.625rem] w-fit translate-y-[2px] px-2 py-0.5 {$enrichedReferences
+			? 'bg-[#016eb1] text-white hover:bg-[#015a91] transition rounded-md'
+			: 'dark:bg-white/5 dark:text-white/80 dark:hover:text-white bg-gray-50 text-black/80 hover:text-black transition rounded-xl'}"
 		on:click={() => {
 			onClick(id);
 		}}

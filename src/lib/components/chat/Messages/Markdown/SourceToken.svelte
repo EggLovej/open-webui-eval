@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { getContext } from 'svelte';
+	import { readable, type Readable } from 'svelte/store';
 	import { LinkPreview } from 'bits-ui';
 	import { decodeString } from '$lib/utils';
 	import { getCitationClaim } from '$lib/utils/citations';
@@ -11,6 +13,9 @@
 
 	let containerElement;
 	let openPreview = false;
+
+	// Set by ContentRenderer; blue chips belong to enriched references
+	const enrichedReferences: Readable<boolean> = getContext('enrichedReferences') ?? readable(true);
 
 	// Also report the sentence this marker cites. Read from the marker in the message,
 	// since the buttons of a multi-source popover render outside it.
@@ -56,14 +61,19 @@
 				<LinkPreview.Trigger>
 					<button
 						aria-label={`${getDisplayTitle(formattedTitle(decodeString(sourceIds[token.ids[0] - 1])))} +${(token?.ids ?? []).length - 1} more sources`}
-						class="text-[0.625rem] w-fit translate-y-[2px] px-2 py-0.5 bg-[#016eb1] text-white hover:bg-[#015a91] transition rounded-md"
+						class="text-[0.625rem] w-fit translate-y-[2px] px-2 py-0.5 {$enrichedReferences
+							? 'bg-[#016eb1] text-white hover:bg-[#015a91] transition rounded-md'
+							: 'dark:bg-white/5 dark:text-white/80 dark:hover:text-white bg-gray-50 text-black/80 hover:text-black transition rounded-xl'}"
 						on:click={() => {
 							openPreview = !openPreview;
 						}}
 					>
 						<span class="line-clamp-1">
 							{getDisplayTitle(formattedTitle(decodeString(sourceIds[token.ids[0] - 1])))}
-							<span class="text-white/70">+{(token?.ids ?? []).length - 1}</span>
+							<span
+								class={$enrichedReferences ? 'text-white/70' : 'dark:text-white/50 text-black/50'}
+								>+{(token?.ids ?? []).length - 1}</span
+							>
 						</span>
 					</button>
 				</LinkPreview.Trigger>

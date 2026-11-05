@@ -58,6 +58,7 @@
 
 	import Error from './Error.svelte';
 	import Citations from './Citations.svelte';
+	import { resolveFeatures } from '$lib/utils/features';
 	import CodeExecutions from './CodeExecutions.svelte';
 	import ContentRenderer from './ContentRenderer.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
@@ -97,6 +98,7 @@
 		done: boolean;
 		error?: boolean | { content: string };
 		sources?: string[];
+		features?: Record<string, boolean>;
 		code_executions?: {
 			uuid: string;
 			name: string;
@@ -861,6 +863,7 @@
 									content={message.content}
 									output={message.output}
 									sources={message.sources}
+									enrichedReferences={resolveFeatures(message?.features).enrichedReferences}
 									floatingButtons={message?.done &&
 										!readOnly &&
 										($settings?.showFloatingActionButtons ?? true)}
@@ -932,6 +935,7 @@
 									{chatId}
 									model={message?.model}
 									sources={message?.sources ?? message?.citations}
+									enrichedReferences={resolveFeatures(message?.features).enrichedReferences}
 									{readOnly}
 								/>
 							{/if}

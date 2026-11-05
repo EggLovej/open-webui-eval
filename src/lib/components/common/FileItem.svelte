@@ -13,6 +13,7 @@
 		sourceViewerAvailable
 	} from '$lib/stores';
 	import { getDocumentPreview } from '$lib/utils/documentSources';
+	import { resolveFeatures } from '$lib/utils/features';
 
 	import FileItemModal from './FileItemModal.svelte';
 	import GarbageBin from '../icons/GarbageBin.svelte';
@@ -68,7 +69,7 @@
 	on:click={async () => {
 		const filesystemPath = item?.type === 'filesystem' ? (item.path ?? item.url ?? item.id) : null;
 		const document =
-			!loading && $sourceViewerAvailable
+			!loading && $sourceViewerAvailable && resolveFeatures($settings?.features).enrichedReferences
 				? getDocumentPreview({ ...item, type: item?.type ?? type, name: item?.name ?? name })
 				: null;
 

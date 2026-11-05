@@ -1,5 +1,6 @@
 <script>
-	import { onDestroy, onMount, tick, getContext } from 'svelte';
+	import { onDestroy, onMount, tick, getContext, setContext } from 'svelte';
+	import { writable } from 'svelte/store';
 	const i18n = getContext('i18n');
 
 	import Markdown from './Markdown.svelte';
@@ -82,6 +83,13 @@
 	export let done = true;
 	export let model = null;
 	export let sources = null;
+	// Whether the backend numbered this reply's sources per chunk (see getCitationKey)
+	export let enrichedReferences = true;
+
+	// Read by the inline citation chips (Markdown/Source.svelte), several components down
+	const enrichedReferencesStore = writable(enrichedReferences);
+	setContext('enrichedReferences', enrichedReferencesStore);
+	$: enrichedReferencesStore.set(enrichedReferences);
 
 	export let save = false;
 	export let preview = false;
@@ -103,9 +111,9 @@
 	let floatingButtonsRange = null;
 
 	let sourceIds = [];
-	$: getSourceIds(sources);
+	$: getSourceIds(sources, enrichedReferences);
 
-	const getSourceIds = (sources) => {
+	const getSourceIds = (sources, enrichedReferences = true) => {
 		const result = [];
 		const seenIds = new Set();
 		for (const source of sources ?? []) {
@@ -116,7 +124,7 @@
 				}
 				const metadata = source.metadata?.[index];
 				const id = metadata?.source ?? source?.source?.id ?? 'N/A';
-				const key = getCitationKey(source, metadata, source.document[index]);
+				const key = getCitationKey(source, metadata, source.document[index], enrichedReferences);
 				if (seenIds.has(key)) {
 					continue;
 				}
