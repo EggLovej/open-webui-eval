@@ -185,6 +185,11 @@ def is_internal_chat(meta: dict | None) -> bool:
     return bool(meta and meta.get('internal') is True)
 
 
+# Message meta keys that are patched in on their own and survive a full meta write
+# (upsert_message_to_history): a voice update, the running task id and the reply's feature switches.
+PATCHED_META_KEYS = frozenset({'voice', 'task_id', 'features'})
+
+
 class ChatModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)  # allows ORM model binding
     id: str
@@ -1076,17 +1081,18 @@ class ChatTable:
         if message_id in messages:
             # Voice updates must not replace approval-resume metadata, and approval
             # pauses must retain the generated speech already attached to this turn.
+            # The reply's feature switches are kept the same way.
             existing_meta = messages[message_id].get('meta')
             existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
             incoming_meta = message.get('meta')
             if isinstance(incoming_meta, dict):
-                if set(incoming_meta) <= {'voice', 'task_id'}:
+                if set(incoming_meta) <= PATCHED_META_KEYS:
                     message = {**message, 'meta': {**existing_meta, **incoming_meta}}
                 else:
                     message = {
                         **message,
                         'meta': {
-                            **{key: existing_meta[key] for key in ('voice', 'task_id') if key in existing_meta},
+                            **{key: existing_meta[key] for key in PATCHED_META_KEYS if key in existing_meta},
                             **incoming_meta,
                         },
                     }

@@ -1840,7 +1840,17 @@ async def chat_completion(
 
             if is_saved_chat_id(chat_id):
                 await Chats.upsert_message_to_chat_by_id_and_message_id(
-                    chat_id, assistant_message_id, {'meta': {'task_id': per_model_metadata['task_id']}}, touch=False
+                    chat_id,
+                    assistant_message_id,
+                    {
+                        'meta': {
+                            'task_id': per_model_metadata['task_id'],
+                            # The switches this reply is generated with; the frontend renders it by
+                            # them (featuresOfMessage in src/lib/utils/features.ts)
+                            'features': per_model_metadata.get('features') or {},
+                        }
+                    },
+                    touch=False,
                 )
 
             # Per-model form_data: own model

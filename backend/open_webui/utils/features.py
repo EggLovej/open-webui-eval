@@ -2,8 +2,9 @@
 Switchable features of this fork, so each can be evaluated on its own and in combination.
 
 The client sends its switches in form_data['features'] (see src/lib/utils/features.ts,
-which defines the same defaults). A missing switch means the default, so API clients
-that send none get the default behaviour.
+which defines the same defaults) and records them on the reply as message.meta.features,
+so the reply keeps rendering the way it was generated. A missing switch means the
+default, so API clients that send none get the default behaviour.
 """
 
 FEATURE_DEFAULTS = {

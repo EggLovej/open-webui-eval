@@ -75,7 +75,7 @@
 	import { acquireWakeLock } from '$lib/utils/wakeLock';
 	import { routeAvatarAnimation } from '$lib/utils/voice-avatar';
 	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
-	import { resolveFeatures, toRequestFeatures } from '$lib/utils/features';
+	import { featuresOfMessage, resolveFeatures, toRequestFeatures } from '$lib/utils/features';
 	import {
 		applyResponseStreamEvent,
 		getOutputText,
@@ -3982,8 +3982,9 @@
 					model: model.id,
 					modelName: model.name ?? model.id,
 					modelIdx: modelIdx ? modelIdx : _modelIdx,
-					// The switches this reply is generated with; it renders by them, not by the current setting
-					features: resolveFeatures($settings?.features),
+					// The switches this reply is generated with; it renders by them, not by the current
+					// setting. In meta, the one free-form field a stored reply keeps (featuresOfMessage).
+					meta: { features: toRequestFeatures(resolveFeatures($settings?.features)) },
 					timestamp: Math.floor(Date.now() / 1000) // Unix epoch
 				};
 
@@ -4133,7 +4134,9 @@
 		// A reply keeps the switches it was started with, so continuing it matches its sources
 		return {
 			...features,
-			...toRequestFeatures(resolveFeatures(responseMessage?.features ?? $settings?.features))
+			...toRequestFeatures(
+				resolveFeatures(featuresOfMessage(responseMessage) ?? $settings?.features)
+			)
 		};
 	};
 
