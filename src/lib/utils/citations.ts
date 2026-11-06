@@ -1,7 +1,14 @@
-// With enriched references each distinct chunk gets its own citation number, so an inline
-// [n] points at one passage instead of a whole document; without, a document's chunks share
-// one number (upstream behaviour). Must stay in sync with get_source_context in
-// backend/open_webui/utils/middleware.py, which assigns the numbers the model sees.
+/**
+ * Whether a source's chunks are numbered one by one. With enriched references each distinct
+ * chunk gets its own citation number, so an inline [n] points at one passage instead of a whole
+ * document. Without, a document's chunks share one number (upstream behaviour), and so do tool
+ * results: the model saw them without content, so it cites the file and its line numbers.
+ */
+export const citesPerChunk = (source: any, enriched: boolean): boolean =>
+	enriched && !source?.tool_result;
+
+// Must stay in sync with get_source_context in backend/open_webui/utils/middleware.py, which
+// assigns the numbers the model sees.
 export const getCitationKey = (
 	source: any,
 	metadata: any,
@@ -9,7 +16,7 @@ export const getCitationKey = (
 	enriched = true
 ): string => {
 	const id = metadata?.source ?? source?.source?.id ?? 'N/A';
-	return enriched ? `${id}\u0000${document ?? ''}` : id;
+	return citesPerChunk(source, enriched) ? `${id}\u0000${document ?? ''}` : id;
 };
 
 // The backend (PyPDF) and the browser (pdf.js) extract PDF text differently: line breaks,
@@ -256,6 +263,28 @@ export const resolveSegments = (text: string, suffix: string | null): string | n
 
 	const picked = getSegments(text).slice(start - 1, end);
 	return picked.length ? picked.join('\n') : null;
+};
+
+/**
+ * Which of a citation's documents a [id#suffix] marker points at, and the text it selects.
+ * A citation of one file can hold several documents (retrieved chunks and a viewed file with
+ * line numbers); only line-numbered documents are tried when there are any, since a line
+ * number would also "resolve" as a segment of any chunk that has that many lines.
+ */
+export const resolveCitedDocument = (
+	documents: string[],
+	suffix: string | null
+): { index: number; selected: string | null } => {
+	const indices = documents.map((_, index) => index);
+	const numbered = indices.filter(
+		(index) => stripLineNumbers(documents[index]) !== documents[index]
+	);
+	// Once a file was viewed with line numbers, a suffix is a line number, not a chunk segment
+	for (const index of numbered.length ? numbered : indices) {
+		const selected = resolveSegments(documents[index], suffix);
+		if (selected) return { index, selected };
+	}
+	return { index: 0, selected: null };
 };
 
 export type Box = { left: number; top: number; width: number; height: number };

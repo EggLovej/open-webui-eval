@@ -635,7 +635,10 @@ def get_source_context(
     With enriched references, each distinct chunk gets its own id and its lines
     are labelled as segments, so an inline citation points at one passage instead
     of a whole document. Without, chunks of one document share an id (upstream
-    behaviour). The frontend numbers sources the same way (getCitationKey in
+    behaviour). So do sources listed without content (tool results, which the
+    model already has in its tool message): empty tags of one file would be
+    indistinguishable, and the model cites the file's line numbers instead.
+    The frontend numbers sources the same way (getCitationKey in
     src/lib/utils/citations.ts).
     """
     context_string = ''
@@ -644,7 +647,7 @@ def get_source_context(
     for source in sources:
         for doc, meta in zip(source.get('document', []), source.get('metadata', [])):
             source_id = meta.get('source') or source.get('source', {}).get('id') or 'N/A'
-            citation_key = (source_id, doc) if enriched_references else source_id
+            citation_key = (source_id, doc) if enriched_references and include_content else source_id
             if citation_key not in source_ids:
                 source_ids[citation_key] = len(source_ids) + 1
             src_name = source.get('source', {}).get('name')
@@ -5816,6 +5819,10 @@ async def streaming_chat_response_handler(response, ctx):
                                     tool_result=tool_result,
                                     tool_id=tool.get('tool_id', '') if tool else '',
                                 )
+                                for citation_source in citation_sources:
+                                    # Listed to the model without content, so the file gets one
+                                    # citation id (get_source_context); the frontend mirrors this
+                                    citation_source['tool_result'] = True
                                 tool_call_sources.extend(citation_sources)
                             except Exception as e:
                                 log.exception(f'Error extracting citation source: {e}')

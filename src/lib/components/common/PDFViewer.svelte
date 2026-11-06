@@ -480,26 +480,27 @@
 	};
 
 	const scrollToTargetPage = async () => {
-		if (!outerContainer || !sceneElement || !pdfDoc) return;
+		if (!outerContainer || !sceneElement || !pdfDoc || singlePage) return;
 		const page = clampDocumentTargetPage(targetPage, pdfDoc.numPages);
-		if (!page) return;
-
-		if (singlePage) return;
 
 		await tick();
-		const pageWrapper = sceneElement.querySelectorAll('.pdf-page-wrapper')[page - 1] as
-			| HTMLElement
-			| undefined;
+		// A located passage wins over the page; a source without a page (a viewed file, a tool
+		// result) still scrolls to its highlight.
 		const passage =
 			sceneElement.querySelector<HTMLElement>('[data-sentence-highlight]') ??
 			sceneElement.querySelector<HTMLElement>('[data-passage-highlight]');
 		if (passage) {
 			passage.scrollIntoView({ block: 'center' });
-		} else {
+		} else if (page) {
+			const pageWrapper = sceneElement.querySelectorAll('.pdf-page-wrapper')[page - 1] as
+				| HTMLElement
+				| undefined;
 			pageWrapper?.scrollIntoView({ block: 'start' });
 		}
-		activePage = page;
-		onPageChange?.(page);
+		if (page) {
+			activePage = page;
+			onPageChange?.(page);
+		}
 	};
 
 	const syncVisiblePage = () => {

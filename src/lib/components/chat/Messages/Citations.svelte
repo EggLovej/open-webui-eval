@@ -10,7 +10,12 @@
 	} from '$lib/stores';
 	import { isValidHttpUrl } from '$lib/utils';
 
-	import { getCitationKey, resolveSegments, stripLineNumbers } from '$lib/utils/citations';
+	import {
+		citesPerChunk,
+		getCitationKey,
+		resolveCitedDocument,
+		stripLineNumbers
+	} from '$lib/utils/citations';
 
 	import CitationModal from './Citations/CitationModal.svelte';
 
@@ -44,10 +49,11 @@
 	// File chunks open next to the chat; web results and views without a side panel use the modal.
 	// `claim` is the sentence an inline [n] backs; the citation list below has none.
 	const openCitation = (citation, claim = '', segment: string | null = null) => {
-		const metadata = citation?.metadata?.[0];
+		// A file cited by line numbers holds several documents; open the one the marker points at
+		const { index, selected } = resolveCitedDocument(citation?.document ?? [], segment);
+		const metadata = citation?.metadata?.[index] ?? citation?.metadata?.[0];
 		if (enrichedReferences && !readOnly && $sourceViewerAvailable && metadata?.file_id) {
-			const chunk = citation.document?.[0] ?? '';
-			const selected = resolveSegments(chunk, segment);
+			const chunk = citation.document?.[index] ?? '';
 			showArtifacts.set(false);
 			showEmbeds.set(false);
 			sourceViewer.set({
@@ -158,7 +164,7 @@
 				const distance = source?.distances?.[index];
 
 				const id = metadata?.source ?? source?.source?.id ?? 'N/A';
-				// Enriched: one citation per chunk. Otherwise one per document, as upstream.
+				// Enriched: one citation per chunk. Otherwise, and for tool results, one per document.
 				const key = getCitationKey(source, metadata, document, enrichedReferences);
 				let _source = source?.source;
 
@@ -181,8 +187,8 @@
 						metadata: metadata ? [metadata] : [],
 						distances: distance !== undefined ? [distance] : []
 					});
-				} else if (!enrichedReferences) {
-					// A document's further chunks join its citation. With enriched references the
+				} else if (!citesPerChunk(source, enrichedReferences)) {
+					// A document's further chunks join its citation. With per-chunk numbering the
 					// key includes the chunk text, so a repeat is the same passage, listed once.
 					existingSource.document.push(document);
 					existingSource.metadata.push(metadata);
