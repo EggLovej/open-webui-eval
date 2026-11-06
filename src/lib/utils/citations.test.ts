@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	citesPerChunk,
 	claimAround,
 	locateSentences,
 	formFieldsFromAnnotations,
@@ -11,6 +12,7 @@ import {
 	mergeLineBoxes,
 	normalizeForMatch,
 	parseSegmentRange,
+	resolveCitedDocument,
 	resolveSegments,
 	stripLineNumbers
 } from './citations';
@@ -47,6 +49,37 @@ describe('getCitationKey', () => {
 
 	it('falls back to the source id when chunk metadata has no source', () => {
 		expect(getCitationKey(source, undefined, 'x')).toBe(getCitationKey(source, {}, 'x'));
+	});
+
+	it('gives a tool result one key per file even with enriched references', () => {
+		const tool = { ...source, tool_result: true };
+		const meta = { source: 'paper.pdf' };
+		expect(citesPerChunk(tool, true)).toBe(false);
+		expect(getCitationKey(tool, meta, 'chunk A')).toBe(getCitationKey(tool, meta, 'chunk B'));
+		expect(getCitationKey(tool, meta, 'chunk A')).not.toBe(getCitationKey(source, meta, 'chunk A'));
+	});
+});
+
+describe('resolveCitedDocument', () => {
+	const chunk = 'First line of a chunk\nSecond line\nThird line\nFourth line';
+	const viewed =
+		'16074: 2 Definition\n16075: Der Gemeindevorstand ist zuständig\n16076: umfasst auch';
+
+	it('picks the line-numbered document for a line-number citation', () => {
+		expect(resolveCitedDocument([chunk, viewed], '16075-16076')).toEqual({
+			index: 1,
+			selected: 'Der Gemeindevorstand ist zuständig\numfasst auch'
+		});
+	});
+
+	it('prefers line numbers over a chunk that happens to have that many lines', () => {
+		expect(resolveCitedDocument([chunk, viewed], '16074').index).toBe(1);
+		expect(resolveCitedDocument([viewed, chunk], '3').selected).toBeNull();
+	});
+
+	it('falls back to the first document when nothing resolves', () => {
+		expect(resolveCitedDocument([chunk], '99')).toEqual({ index: 0, selected: null });
+		expect(resolveCitedDocument([chunk], null)).toEqual({ index: 0, selected: null });
 	});
 });
 
